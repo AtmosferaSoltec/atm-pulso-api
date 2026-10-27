@@ -15,6 +15,10 @@ import (
 
 // Deps are what the Service needs.
 type Deps struct {
+	Gyms     GymRepository
+	Team     TeamRepository
+	Clients  ClientRepository
+	Catalogs CatalogRepository
 	Users    UserRepository
 	Hasher   PasswordHasher
 	Issuer   TokenIssuer

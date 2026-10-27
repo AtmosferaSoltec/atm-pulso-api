@@ -27,15 +27,21 @@ type Deps struct {
 
 // Module is the assembled accounts module.
 type Module struct {
-	service *app.Service
-	handler *accountshttp.Handler
+	repository *postgres.Repository
+	service    *app.Service
+	handler    *accountshttp.Handler
 }
 
 // New wires the module by hand: repository, crypto adapters, use cases, HTTP.
 func New(deps Deps) (*Module, error) {
+	repository := postgres.NewRepository(deps.Pool)
 	jwt := security.NewJWT(deps.JWTSecret, deps.AccessTokenTTL)
 	service, err := app.NewService(app.Deps{
-		Users:    postgres.NewRepository(deps.Pool),
+		Gyms:     repository,
+		Team:     repository,
+		Clients:  repository,
+		Catalogs: repository,
+		Users:    repository,
 		Hasher:   security.Argon2idHasher{},
 		Issuer:   jwt,
 		Verifier: jwt,
@@ -44,11 +50,18 @@ func New(deps Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Module{service: service, handler: accountshttp.NewHandler(service, deps.Clock)}, nil
+	return &Module{repository: repository, service: service, handler: accountshttp.NewHandler(service, deps.Clock)}, nil
 }
 
 // Authenticator is what protects every private route of every module.
 func (m *Module) Authenticator() auth.Authenticator { return m.service }
 
 // Routes mounts the module's endpoints.
-func (m *Module) Routes(limited, protected gin.IRoutes) { m.handler.Routes(limited, protected) }
+func (m *Module) Routes(limited, protected gin.IRoutes) {
+	m.handler.Routes(limited, protected)
+	m.handler.TeamRoutes(protected, auth.OrganizationScope(m.repository))
+	protected.GET("/catalog", auth.OrganizationScope(m.repository), m.handler.Catalog)
+}
+
+// Branches exposes tenant-scoped lookup without consumers importing this module.
+func (m *Module) Branches() *postgres.Repository { return m.repository }

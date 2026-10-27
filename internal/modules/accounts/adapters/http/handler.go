@@ -45,6 +45,14 @@ func NewHandler(service *app.Service, clock clock.Clock) *Handler {
 // Routes mounts the module: login behind the strict per-IP limit, the rest protected.
 func (h *Handler) Routes(limited, protected gin.IRoutes) {
 	limited.POST("/auth/login", h.login)
+	protected.PATCH("/gyms/:gym_id", h.updateGym)
+	protected.PATCH("/clients/:client_id/owner", h.updateOwner)
+	protected.POST("/clients/:client_id/owner/password", h.resetOwnerPassword)
+	protected.GET("/clients", h.listClients)
+	protected.GET("/clients/summary", h.clientSummary)
+	protected.POST("/clients", h.createClient)
+	protected.POST("/clients/:client_id/gyms", h.addGym)
+	protected.POST("/gyms/:gym_id/branches", h.addBranch)
 	protected.GET("/me", h.me)
 	protected.PATCH("/me", h.updateMe)
 	protected.POST("/me/password", h.changePassword)
@@ -127,7 +135,26 @@ func bind(c *gin.Context, into any) bool {
 func respond(c *gin.Context, err error) {
 	var validation *domain.ValidationError
 	var locked *domain.LockedError
+	var planLimit *domain.PlanLimitError
 	switch {
+	case errors.As(err, &planLimit):
+		apierror.Respond(c, apierror.New(http.StatusConflict, "PLAN_LIMIT_EXCEEDED", "Confirma el acuerdo de los gimnasios o sedes adicionales.").WithDetails(planLimit))
+	case errors.Is(err, domain.ErrCannotModifySelf):
+		apierror.Respond(c, apierror.New(http.StatusForbidden, "CANNOT_MODIFY_SELF", "No puedes modificar tu propia cuenta aquí."))
+	case errors.Is(err, domain.ErrCannotModifyOwner):
+		apierror.Respond(c, apierror.New(http.StatusForbidden, "CANNOT_MODIFY_OWNER", "Solo Atmósfera puede modificar al dueño."))
+	case errors.Is(err, domain.ErrRoleNotAssignable):
+		apierror.Respond(c, apierror.New(http.StatusForbidden, "ROLE_NOT_ASSIGNABLE", "No puedes asignar este rol."))
+	case errors.Is(err, domain.ErrScopeNotAllowed):
+		apierror.Respond(c, apierror.New(http.StatusForbidden, "SCOPE_NOT_ALLOWED", "No puedes administrar este gimnasio o sede."))
+	case errors.Is(err, domain.ErrForeignScope):
+		apierror.Respond(c, apierror.New(http.StatusBadRequest, "SCOPE_NOT_ALLOWED", "El gimnasio o sede no está disponible."))
+	case errors.Is(err, domain.ErrForbidden):
+		apierror.Respond(c, apierror.ErrForbidden)
+	case errors.Is(err, domain.ErrConflict):
+		apierror.Respond(c, apierror.New(http.StatusConflict, "CONFLICT", "El registro ya existe."))
+	case errors.Is(err, domain.ErrDocumentTaken):
+		apierror.Respond(c, apierror.New(http.StatusConflict, "USER_DOCUMENT_TAKEN", "Este DNI ya pertenece a un usuario."))
 	case errors.As(err, &validation):
 		fields := make([]apierror.FieldError, 0, len(validation.Issues))
 		for _, issue := range validation.Issues {
@@ -145,10 +172,23 @@ func respond(c *gin.Context, err error) {
 		apierror.Respond(c, errInvalidCredentials)
 	case errors.Is(err, domain.ErrCurrentPasswordIncorrect):
 		apierror.Respond(c, errCurrentPassword)
+	case errors.Is(err, domain.ErrResourceNotFound):
+		apierror.Respond(c, apierror.ErrNotFound)
 	case errors.Is(err, domain.ErrUserNotFound):
 		// The token was valid but the user vanished between the check and the lookup.
 		apierror.Respond(c, apierror.ErrUnauthorized)
 	default:
 		apierror.Respond(c, err)
 	}
+}
+
+// Catalog returns the shared directory and the current user's branch access.
+func (h *Handler) Catalog(c *gin.Context) {
+	principal, _ := auth.FromContext(c.Request.Context())
+	catalog, err := h.service.Catalog(c.Request.Context(), principal)
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	apierror.OK(c, catalog)
 }

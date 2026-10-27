@@ -6,6 +6,14 @@ import (
 )
 
 var (
+	ErrCannotModifySelf  = errors.New("cannot modify self")
+	ErrCannotModifyOwner = errors.New("cannot modify owner")
+	ErrRoleNotAssignable = errors.New("role not assignable")
+	ErrScopeNotAllowed   = errors.New("scope not allowed")
+	ErrForeignScope      = errors.New("foreign scope")
+	ErrForbidden         = errors.New("forbidden")
+	ErrConflict          = errors.New("conflict")
+	ErrResourceNotFound  = errors.New("resource not found")
 	// ErrUserNotFound: no user matches.
 	ErrUserNotFound = errors.New("user not found")
 	// ErrInvalidCredentials is deliberately the same for an unknown DNI, a wrong
@@ -47,3 +55,11 @@ const (
 	CodePasswordTooLong       = "PASSWORD_TOO_LONG"
 	CodePasswordUnchanged     = "PASSWORD_UNCHANGED"
 )
+
+// PlanLimitError reports the proposed resources requiring an extra agreement.
+type PlanLimitError struct {
+	ExtraGyms     int `json:"extra_gyms"`
+	ExtraBranches int `json:"extra_branches"`
+}
+
+func (e *PlanLimitError) Error() string { return "plan limit exceeded" }

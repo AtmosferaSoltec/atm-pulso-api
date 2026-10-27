@@ -174,9 +174,9 @@ Keep `VALIDATION_FAILED` with `details: [{field, code}]` for field problems (`DO
 
 | id | Question | Default |
 |---|---|---|
-| Q-PASSWORD | Who sets a new user's first password? | The creator types it; no forced change at first login. |
+| Q-PASSWORD | Who sets a new user's first password? | **Decided:** the temporary password is the DNI and must be changed at first login (business-rules §15). |
 | Q-LOGO | Gyms can upload a logo in the prototype. Where to store it? | **Defer.** Ship without it (the web keeps the monogram and hides the upload). If approved later: `gym_logos` as `bytea` (max 512 KB, PNG/JPEG/WebP checked by magic bytes) served by an authenticated endpoint. |
-| Q-DNI-EDIT | May a manager correct a user's DNI? | No. Deactivate and create again. |
+| Q-DNI-EDIT | May a manager correct a user's DNI? | **Decided:** yes, the authorized superior (business-rules §2); never self-correction. |
 
 ## Smoke test (local)
 
@@ -217,3 +217,15 @@ and conditional password updates. Added migration `00003` and a real PostgreSQL 
 covering reset-state login, blocked routes, validation, token invalidation and login with the new
 password. Full API tests passed with `-race -count=1`; fixture counts returned to zero. Client and
 team creation/reset endpoints are still pending, so API-02 remains incomplete.
+
+## Completion — 2026-10-27
+
+- Implemented: `GET /catalog`; platform `GET/POST /clients`, `GET /clients/summary`, `POST /clients/{id}/gyms`,
+  `POST /gyms/{id}/branches`, `PATCH /clients/{id}/owner`, `POST /clients/{id}/owner/password`; gym settings
+  `PATCH /gyms/{id}`; team `GET/POST /users`, `PATCH /users/{id}`, `POST /users/{id}/activate|deactivate|password`.
+  Migrations `00003` (password onboarding) and `00004` (tenant constraints). All documented in `openapi.yaml`.
+- Verified: `gofmt` clean, `go vet`, `golangci-lint` 0 issues, `go test ./... -race -count=1` green against PostgreSQL;
+  the test database ends with 0 users and 0 organizations.
+- Gaps: no automatic test yet that every registered route appears in `openapi.yaml` (planned in API-06); `BranchInfo`
+  for other modules (API-03) is not exposed yet; gym logos are deferred (Q-LOGO, Cloudflare R2 later).
+- Next: WEB-01 and WEB-02 can start from `openapi.yaml`; API-03 follows.

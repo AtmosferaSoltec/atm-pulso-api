@@ -26,8 +26,13 @@ const (
 // Argon2idHasher hashes passwords as "$argon2id$v=19$m=...,t=...,p=...$salt$key".
 type Argon2idHasher struct{}
 
+// Shared across all hasher instances, including simultaneous Hash and Verify calls.
+var hashSlots = make(chan struct{}, 4)
+
 // Hash returns the encoded argon2id hash of password with a fresh random salt.
 func (Argon2idHasher) Hash(password string) (string, error) {
+	hashSlots <- struct{}{}
+	defer func() { <-hashSlots }()
 	salt := make([]byte, saltLength)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generate salt: %w", err)
@@ -62,6 +67,8 @@ func (Argon2idHasher) Verify(password, encoded string) (bool, error) {
 	if err != nil || len(want) == 0 {
 		return false, errors.New("invalid argon2 key")
 	}
+	hashSlots <- struct{}{}
+	defer func() { <-hashSlots }()
 	got := argon2.IDKey([]byte(password), salt, passes, memory, lanes, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }

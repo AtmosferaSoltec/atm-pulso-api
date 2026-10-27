@@ -75,13 +75,13 @@ func (h harness) newTenant(t *testing.T) tenant {
 	})
 
 	exec(`INSERT INTO gyms (id, organization_id, name) VALUES ($1, $3, $4), ($2, $3, $5)`, tn.GymOne, tn.GymTwo, tn.OrganizationID, tn.GymOneName, tn.GymTwoName)
-	exec(`INSERT INTO branches (id, gym_id, name) VALUES ($1, $4, 'Sede A'), ($2, $4, 'Sede B'), ($3, $5, 'Sede C')`, tn.BranchA, tn.BranchB, tn.BranchC, tn.GymOne, tn.GymTwo)
+	exec(`INSERT INTO branches (id, gym_id, name, organization_id) VALUES ($1, $4, 'Sede A', $6), ($2, $4, 'Sede B', $6), ($3, $5, 'Sede C', $6)`, tn.BranchA, tn.BranchB, tn.BranchC, tn.GymOne, tn.GymTwo, tn.OrganizationID)
 	exec(`INSERT INTO users (id, organization_id, gym_id, document_number, full_name, role, password_hash) VALUES
 		($1, $3, NULL, $4, 'Dueño de Prueba', 'owner', $7),
 		($2, $3, $6, $5, 'Admin de Prueba', 'admin', $7)`, tn.OwnerID, tn.AdminID, tn.OrganizationID, tn.Owner, tn.Admin, tn.GymOne, hash)
 	exec(`INSERT INTO users (id, organization_id, document_number, full_name, role, password_hash)
 		VALUES ($1, $2, $3, 'Recepción de Prueba', 'receptionist', $4)`, tn.ReceptionistID, tn.OrganizationID, tn.Receptionist, hash)
-	exec(`INSERT INTO user_branches (user_id, branch_id) VALUES ($1, $2), ($1, $3)`, tn.ReceptionistID, tn.BranchA, tn.BranchB)
+	exec(`INSERT INTO user_branches (user_id, branch_id, organization_id) VALUES ($1, $2, $4), ($1, $3, $4)`, tn.ReceptionistID, tn.BranchA, tn.BranchB, tn.OrganizationID)
 	return tn
 }
 

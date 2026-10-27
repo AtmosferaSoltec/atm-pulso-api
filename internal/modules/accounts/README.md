@@ -4,7 +4,7 @@ Owns **who can sign in and what they can see**: organizations (clients), gyms, b
 users, plus login and the user's own profile.
 
 ## Tables (it owns them)
-`organizations`, `gyms`, `branches`, `users`, `user_branches`. The database enforces the rules
+`organizations`, `gyms`, `branches`, `users`, `user_branches`, `plan_agreements`. The database enforces the rules
 that must never be broken: an admin's gym belongs to the admin's organization (composite FK),
 every role has exactly the scope it needs (`CHECK`), and a DNI is unique system-wide.
 
@@ -35,3 +35,11 @@ Required changes return `data.login_required = true` without a token. Authentica
 blocks all other routes except reading the profile and changing the password with
 `403 PASSWORD_CHANGE_REQUIRED`. Password updates use an expected version to avoid overwriting
 concurrent manager resets. Product rules are in `docs/domain/business-rules.md` §15.
+
+## Directory and tenancy
+
+`GET /catalog` returns the shared organization directory with effective day-pass prices and
+principal-derived branch accessibility. Superadmin GET inspection requires a validated
+`X-Organization-Id`; other roles cannot override their live organization. `Module.Branches()`
+exposes a structural `BranchInfo` port for future modules. Composite foreign keys enforce branch
+and receptionist tenant isolation. Hash and verification operations share four concurrency slots.
