@@ -128,6 +128,9 @@ type Meta struct {
 	Page     int   `json:"page"`
 	PageSize int   `json:"page_size"`
 	Total    int64 `json:"total"`
+	// Counts and Totals carry list-specific aggregates (members per status, payment totals).
+	Counts any `json:"counts,omitempty"`
+	Totals any `json:"totals,omitempty"`
 }
 
 // Page answers 200 with { "data": items, "meta": meta }.

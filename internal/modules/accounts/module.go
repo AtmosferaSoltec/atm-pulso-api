@@ -63,5 +63,8 @@ func (m *Module) Routes(limited, protected gin.IRoutes) {
 	protected.GET("/catalog", auth.OrganizationScope(m.repository), m.handler.Catalog)
 }
 
+// Organizations is what the organization-scope middleware of every module needs.
+func (m *Module) Organizations() auth.Organizations { return m.repository }
+
 // Branches exposes tenant-scoped lookup without consumers importing this module.
 func (m *Module) Branches() *postgres.Repository { return m.repository }

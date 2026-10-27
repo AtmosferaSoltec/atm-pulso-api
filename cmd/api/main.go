@@ -20,6 +20,7 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/identity"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/config"
@@ -109,6 +110,8 @@ func run() int {
 	protected := api.Group("", auth.Require(accountsModule.Authenticator()))
 	accountsModule.Routes(limited, protected)
 	documentsModule.Routes(protected)
+	scope := auth.OrganizationScope(accountsModule.Organizations())
+	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
 
 	if err := httpserver.Serve(ctx, router, cfg.Port, log); err != nil {
 		log.Error("server", "error", err)

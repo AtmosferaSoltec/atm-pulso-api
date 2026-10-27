@@ -24,6 +24,7 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/adapters/security"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/httpserver"
@@ -57,6 +58,8 @@ func newHarness(t *testing.T) harness {
 	protected := api.Group("", auth.Require(accountsModule.Authenticator()))
 	accountsModule.Routes(limited, protected)
 	documents.New(identity.Fake{}).Routes(protected)
+	scope := auth.OrganizationScope(accountsModule.Organizations())
+	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
 	return harness{router: router, pool: pool}
 }
 

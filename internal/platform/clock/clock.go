@@ -22,3 +22,14 @@ type Fixed struct {
 
 // Now always returns the same instant.
 func (f Fixed) Now() time.Time { return f.At }
+
+// lima is UTC-5 all year (Peru has no daylight saving time), so a fixed zone is exact
+// and does not depend on the tz database being installed in the image.
+var lima = time.FixedZone("America/Lima", -5*60*60)
+
+// LimaDate returns the calendar date in Lima of an instant, as midnight UTC. Every
+// business date (member status, receipts, payments) is a Lima date.
+func LimaDate(t time.Time) time.Time {
+	local := t.In(lima)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+}

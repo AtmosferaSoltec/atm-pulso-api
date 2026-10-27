@@ -133,3 +133,13 @@ returns the printable data:
 ## Done when
 
 docs/README.md's definition of done; WEB-03 can be built from `openapi.yaml`; the owner reviewed the summary.
+
+## Completion — 2026-10-27
+
+- Implemented module `members` (domain rules with table tests, use cases, PostgreSQL adapter, HTTP) and `internal/platform/receipts`
+  (atomic numbering `R-`/`D-` per organization and payment recording, shared with day passes). Migration `00005`.
+  Endpoints: `GET/POST /members`, `GET/PATCH /members/{id}`, `POST /members/{id}/renewals`, `GET /members/{id}/receipts`, `GET /receipts/{id}`; all in `openapi.yaml`.
+- Decisions: receipts and payments live in the platform kernel instead of a separate module; `members` reads `branches`/`gyms` with SELECTs through its own
+  `Directory` (no Go imports between modules, so `Module.Branches()` was not needed). Status and counts are computed in SQL with the Lima date.
+- Verified: `gofmt`, `go vet`, `golangci-lint` 0 issues, `go test ./... -race` green; 20 concurrent enrollments get `R-000001..R-000020`; a rejected duplicate does not burn a number.
+- Gaps: day-pass receipts show no customer yet (API-04 extends `Receipt`); no API to list payments yet (API-05).

@@ -645,6 +645,136 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /members:
+    get:
+      tags: [members]
+      summary: List the shared member directory with status counts.
+      description: Every role of the organization sees every member. The superadmin may inspect with X-Organization-Id. Counts ignore the status filter but respect q and home_branch_id.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: Name or document (contains). }
+        - { name: status, in: query, schema: { type: string, enum: [active, expiring, expired, scheduled] } }
+        - { name: home_branch_id, in: query, schema: { type: string, format: uuid } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses:
+        "200":
+          description: A page of members.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/MemberView" } }
+                  meta:
+                    allOf:
+                      - { $ref: "#/components/schemas/Pagination" }
+                      - type: object
+                        properties:
+                          counts: { $ref: "#/components/schemas/MemberCounts" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+    post:
+      tags: [members]
+      summary: Enroll a member (member, first period, payment and receipt in one transaction).
+      description: |
+        The branch must be one the caller works in. Repeating the same `id` returns the original sale with 200.
+        Errors: MEMBER_DOCUMENT_TAKEN (409, details.member_id), BRANCH_NOT_ACCESSIBLE (403), SCOPE_NOT_ALLOWED (400, foreign branch),
+        ACCESS_BRANCHES_INVALID (400), VALIDATION_FAILED (400). The superadmin gets 403.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnrollMember" }
+      responses:
+        "200": { description: Repeated request; the original sale., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Sale" } } } } } }
+        "201": { description: Created., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Sale" } } } } } }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "409": { $ref: "#/components/responses/ApiError" }
+  /members/{id}:
+    get:
+      tags: [members]
+      summary: A member with every period.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: The member., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/MemberDetail" } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ApiError" }
+    patch:
+      tags: [members]
+      summary: Edit name and phone (the document never changes).
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name: { type: string, minLength: 3, maxLength: 120 }
+                phone: { type: string, pattern: "^9[0-9]{8}$" }
+      responses:
+        "200": { description: The updated member., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/MemberDetail" } } } } } }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "404": { $ref: "#/components/responses/ApiError" }
+  /members/{id}/renewals:
+    post:
+      tags: [members]
+      summary: Renew a member (new period, payment and receipt).
+      description: |
+        `starts_on` defaults to the latest end date when it is in the future, otherwise today (the server decides).
+        `branch_id` is where it is collected and may differ from the home branch, which never changes.
+        Repeating the same `id` (the period id) returns the original sale with 200.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RenewMember" }
+      responses:
+        "200": { description: Repeated request; the original sale., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Sale" } } } } } }
+        "201": { description: Created., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Sale" } } } } } }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "404": { $ref: "#/components/responses/ApiError" }
+  /members/{id}/receipts:
+    get:
+      tags: [members]
+      summary: Receipts of a member, newest first.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: The receipts., content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/ReceiptSummary" } } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ApiError" }
+  /receipts/{id}:
+    get:
+      tags: [members]
+      summary: Printable data of a receipt (membership or day pass).
+      description: Any past receipt can be reprinted. A receipt of another organization answers 404.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: The receipt., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/ReceiptDetail" } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ApiError" }
+
   /me/password:
     post:
       tags: [profile]
@@ -911,6 +1041,161 @@ components:
         brand_color: { type: string, pattern: '^#[0-9a-f]{6}$' }
         day_pass_price: { type: [string, "null"], example: "15.00" }
         branch_sharing: { type: boolean }
+    BranchName:
+      type: object
+      required: [id, name, gym_name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        gym_name: { type: string }
+    MemberCounts:
+      type: object
+      required: [all, active, expiring, expired, scheduled]
+      properties:
+        all: { type: integer }
+        active: { type: integer }
+        expiring: { type: integer }
+        expired: { type: integer }
+        scheduled: { type: integer }
+    MemberView:
+      type: object
+      required: [id, document_type, document_number, full_name, phone, home_branch, status, days_remaining, plan_label, starts_on, ends_on, last_receipt]
+      properties:
+        id: { type: string, format: uuid }
+        document_type: { type: string, enum: [dni, ce] }
+        document_number: { type: string }
+        full_name: { type: string }
+        phone: { type: string }
+        home_branch: { $ref: "#/components/schemas/BranchName" }
+        status: { type: string, enum: [active, expiring, expired, scheduled] }
+        days_remaining: { type: integer, description: Days until the latest end date; negative when expired. }
+        plan_label: { type: string, example: 3 meses }
+        starts_on: { type: string, format: date }
+        ends_on: { type: string, format: date }
+        last_receipt: { type: [string, "null"], example: R-000012 }
+    AccessBranch:
+      type: object
+      required: [id, label]
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string, example: Atlas Fitness · Miraflores }
+    ReceiptRef:
+      type: object
+      required: [id, number]
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string, example: R-000012 }
+    MembershipView:
+      type: object
+      required: [id, months, plan_label, starts_on, ends_on, amount, access_scope, access_branches, receipt]
+      properties:
+        id: { type: string, format: uuid }
+        months: { type: integer, minimum: 1, maximum: 24 }
+        plan_label: { type: string }
+        starts_on: { type: string, format: date }
+        ends_on: { type: string, format: date }
+        amount: { type: string, example: "270.00" }
+        access_scope: { type: string, enum: [branch, gym, network] }
+        access_branches: { type: array, items: { $ref: "#/components/schemas/AccessBranch" } }
+        receipt: { oneOf: [{ $ref: "#/components/schemas/ReceiptRef" }, { type: "null" }] }
+    MemberDetail:
+      allOf:
+        - { $ref: "#/components/schemas/MemberView" }
+        - type: object
+          required: [memberships]
+          properties:
+            memberships: { type: array, items: { $ref: "#/components/schemas/MembershipView" } }
+    Sale:
+      type: object
+      required: [member, membership, receipt]
+      properties:
+        member: { $ref: "#/components/schemas/MemberView" }
+        membership: { $ref: "#/components/schemas/MembershipView" }
+        receipt: { $ref: "#/components/schemas/ReceiptRef" }
+    EnrollMember:
+      type: object
+      required: [branch_id, document_type, document_number, full_name, phone, months, amount, method]
+      properties:
+        id: { type: string, format: uuid, description: Optional; makes the request idempotent. }
+        branch_id: { type: string, format: uuid, description: Where it is enrolled and collected; becomes the home branch. }
+        document_type: { type: string, enum: [dni, ce] }
+        document_number: { type: string, description: DNI 8 digits; CE 9 to 12. }
+        full_name: { type: string, minLength: 3, maxLength: 120 }
+        phone: { type: string, pattern: "^9[0-9]{8}$" }
+        months: { type: integer, minimum: 1, maximum: 24 }
+        starts_on: { type: string, format: date, description: Defaults to today (Lima). }
+        amount: { type: string, example: "270.00", description: Total charged, 0 to 1,000,000.00. }
+        method: { type: string, enum: [yape_plin, cash, card, transfer] }
+        access_scope: { type: string, enum: [branch, gym, network], default: branch }
+        access_branch_ids:
+          type: array
+          description: Defaults to every branch of the scope; must contain the home branch and be a subset of the scope.
+          items: { type: string, format: uuid }
+    RenewMember:
+      type: object
+      required: [branch_id, months, amount, method]
+      properties:
+        id: { type: string, format: uuid, description: Optional id of the new period; makes the request idempotent. }
+        branch_id: { type: string, format: uuid }
+        months: { type: integer, minimum: 1, maximum: 24 }
+        starts_on: { type: string, format: date }
+        amount: { type: string }
+        method: { type: string, enum: [yape_plin, cash, card, transfer] }
+        access_scope: { type: string, enum: [branch, gym, network], default: branch }
+        access_branch_ids: { type: array, items: { type: string, format: uuid } }
+    ReceiptSummary:
+      type: object
+      required: [id, number, issued_on, plan_label, amount, method]
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string }
+        issued_on: { type: string, format: date }
+        plan_label: { type: string }
+        amount: { type: string }
+        method: { type: string, enum: [yape_plin, cash, card, transfer] }
+    ReceiptDetail:
+      type: object
+      required: [id, number, kind, issued_on, gym, branch, member, membership, payment]
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string, example: R-000012 }
+        kind: { type: string, enum: [membership, day_pass] }
+        issued_on: { type: string, format: date }
+        gym:
+          type: object
+          properties:
+            name: { type: string, description: The display name when the gym has one. }
+            tax_id: { type: [string, "null"] }
+            brand_color: { type: string }
+        branch:
+          type: object
+          properties:
+            name: { type: string }
+            address: { type: [string, "null"] }
+        member:
+          oneOf:
+            - type: object
+              properties:
+                full_name: { type: string }
+                document_type: { type: string }
+                document_number: { type: string }
+                phone: { type: string }
+            - { type: "null" }
+        membership:
+          oneOf:
+            - type: object
+              properties:
+                months: { type: integer }
+                plan_label: { type: string }
+                starts_on: { type: string, format: date }
+                ends_on: { type: string, format: date }
+                access_branches: { type: array, items: { $ref: "#/components/schemas/AccessBranch" } }
+            - { type: "null" }
+        payment:
+          type: object
+          properties:
+            amount: { type: string }
+            method: { type: string }
     Session:
       type: object
       properties:
@@ -976,6 +1261,11 @@ components:
             message: { type: string }
             details: {}
   responses:
+    ApiError:
+      description: Error. The code says what happened (see the endpoint description).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     Error:
       description: error
       content:
