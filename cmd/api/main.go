@@ -4,13 +4,10 @@
 //	api                     starts the server
 //	api migrate [up|down|status]
 //	api healthcheck         used by the image's HEALTHCHECK (it ships no curl)
-//	api seed-dev            loads the fictional demo accounts (development only)
-//	api create-superadmin <dni> "<full name>"   creates a superadmin (password in SUPERADMIN_PASSWORD)
 package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -22,7 +19,6 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/db"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/identity"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
-	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/domain"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
@@ -44,10 +40,6 @@ func main() {
 			os.Exit(healthcheck())
 		case "migrate":
 			os.Exit(migrate(os.Args[2:]))
-		case "seed-dev":
-			os.Exit(seedDev())
-		case "create-superadmin":
-			os.Exit(createSuperadmin(os.Args[2:]))
 		default:
 			fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
 			os.Exit(2)
@@ -142,80 +134,6 @@ func migrate(args []string) int {
 		log.Error("migrate", "error", err)
 		return 1
 	}
-	return 0
-}
-
-// seedDev loads the fictional demo accounts. It refuses to run in production: those
-// users share a password that is written in this repository.
-func seedDev() int {
-	log := logger.New(os.Stdout, false)
-	if os.Getenv("APP_ENV") == string(config.Production) {
-		log.Error("seed-dev refuses to run in production")
-		return 1
-	}
-	databaseURL, err := config.DatabaseURL()
-	if err != nil {
-		log.Error("seed-dev", "error", err)
-		return 1
-	}
-	password := os.Getenv("SEED_PASSWORD")
-	if password == "" {
-		password = "Pulso2026!"
-	}
-	ctx := context.Background()
-	pool, err := database.Open(ctx, databaseURL)
-	if err != nil {
-		log.Error("seed-dev", "error", err)
-		return 1
-	}
-	defer pool.Close()
-	if err := accounts.SeedDemo(ctx, pool, password); err != nil {
-		log.Error("seed-dev", "error", err)
-		return 1
-	}
-	log.Info("demo accounts loaded", "documents", "10000001 10000002 10000003 10000004 10000005")
-	return 0
-}
-
-// createSuperadmin creates the first (or another) superadmin. The password is read from
-// SUPERADMIN_PASSWORD, never from the command line, so it stays out of the shell history
-// and the process list. It works in production: that is where the real one is created.
-func createSuperadmin(args []string) int {
-	log := logger.New(os.Stdout, os.Getenv("APP_ENV") == string(config.Production))
-	if len(args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: SUPERADMIN_PASSWORD=... api create-superadmin <dni> \"<full name>\"")
-		return 2
-	}
-	databaseURL, err := config.DatabaseURL()
-	if err != nil {
-		log.Error("create-superadmin", "error", err)
-		return 1
-	}
-	ctx := context.Background()
-	pool, err := database.Open(ctx, databaseURL)
-	if err != nil {
-		log.Error("create-superadmin", "error", err)
-		return 1
-	}
-	defer pool.Close()
-
-	err = accounts.CreateSuperadmin(ctx, pool, args[0], args[1], os.Getenv("SUPERADMIN_PASSWORD"))
-	var validation *domain.ValidationError
-	switch {
-	case errors.As(err, &validation):
-		for _, issue := range validation.Issues {
-			log.Error("create-superadmin: invalid input", "field", issue.Field, "code", issue.Code)
-		}
-		return 1
-	case errors.Is(err, domain.ErrDocumentTaken):
-		log.Error("create-superadmin: that DNI already belongs to a user")
-		return 1
-	case err != nil:
-		log.Error("create-superadmin", "error", err)
-		return 1
-	}
-	// The DNI is personal data: it is not echoed back.
-	log.Info("superadmin created")
 	return 0
 }
 

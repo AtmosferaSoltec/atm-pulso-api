@@ -4,7 +4,6 @@
 #
 #   scripts/dev.sh                 start the API
 #   scripts/dev.sh migrate up      any subcommand of cmd/api
-#   scripts/dev.sh seed-dev        load the fictional demo accounts
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

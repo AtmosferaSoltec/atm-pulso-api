@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/app"
@@ -168,20 +167,4 @@ func (r *Repository) UpdatePassword(ctx context.Context, id uuid.UUID, passwordH
 		return 0, domain.ErrUserNotFound
 	}
 	return version, err
-}
-
-// uniqueViolation is PostgreSQL's error code for a violated UNIQUE constraint.
-const uniqueViolation = "23505"
-
-// InsertSuperadmin creates a superadmin: a user that belongs to no organization.
-// It returns domain.ErrDocumentTaken when the DNI is already in use.
-func (r *Repository) InsertSuperadmin(ctx context.Context, id uuid.UUID, documentNumber, fullName, passwordHash string) error {
-	_, err := r.pool.Exec(ctx, `
-		INSERT INTO users (id, document_number, full_name, role, password_hash)
-		VALUES ($1, $2, $3, 'superadmin', $4)`, id, documentNumber, fullName, passwordHash)
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation && pgErr.ConstraintName == "users_document_number_key" {
-		return domain.ErrDocumentTaken
-	}
-	return err
 }

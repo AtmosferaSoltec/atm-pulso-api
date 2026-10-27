@@ -4,15 +4,10 @@
 package accounts
 
 import (
-	"context"
-	"fmt"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/domain"
-	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/ids"
 
 	accountshttp "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/adapters/http"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/adapters/postgres"
@@ -57,37 +52,3 @@ func (m *Module) Authenticator() auth.Authenticator { return m.service }
 
 // Routes mounts the module's endpoints.
 func (m *Module) Routes(limited, protected gin.IRoutes) { m.handler.Routes(limited, protected) }
-
-// SeedDemo loads the fictional demo accounts. Development only.
-func SeedDemo(ctx context.Context, pool *pgxpool.Pool, password string) error {
-	hash, err := security.Argon2idHasher{}.Hash(password)
-	if err != nil {
-		return err
-	}
-	return postgres.SeedDemo(ctx, pool, hash)
-}
-
-// CreateSuperadmin creates a superadmin by hand, since there is no registration. It checks
-// the DNI, the name and the password policy and returns *domain.ValidationError for bad
-// input and domain.ErrDocumentTaken when the DNI is already a user.
-func CreateSuperadmin(ctx context.Context, pool *pgxpool.Pool, documentNumber, fullName, password string) error {
-	var issues []domain.Issue
-	if !domain.ValidDocumentNumber(documentNumber) {
-		issues = append(issues, domain.Issue{Field: "document_number", Code: domain.CodeDocumentNumberInvalid})
-	}
-	name := domain.NormalizeFullName(fullName)
-	if _, _, err := domain.ProfileChanges(name, ""); err != nil {
-		issues = append(issues, domain.Issue{Field: "full_name", Code: domain.CodeFullNameInvalid})
-	}
-	if err := domain.NewPassword("", password); err != nil {
-		issues = append(issues, domain.Issue{Field: "password", Code: domain.CodePasswordTooShort})
-	}
-	if len(issues) > 0 {
-		return &domain.ValidationError{Issues: issues}
-	}
-	hash, err := security.Argon2idHasher{}.Hash(password)
-	if err != nil {
-		return fmt.Errorf("hash password: %w", err)
-	}
-	return postgres.NewRepository(pool).InsertSuperadmin(ctx, ids.New(), documentNumber, name, hash)
-}

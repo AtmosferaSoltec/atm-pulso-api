@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,7 +23,6 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/identity"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/adapters/security"
-	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/domain"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
@@ -48,7 +46,6 @@ type harness struct {
 func newHarness(t *testing.T) harness {
 	t.Helper()
 	pool := testsupport.MigratedPool(t)
-	require.NoError(t, accounts.SeedDemo(context.Background(), pool, demoPassword))
 
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	router, api, err := httpserver.NewRouter(httpserver.Options{Logger: quiet, RateLimitPerMinute: 100_000})
@@ -117,29 +114,10 @@ func (h harness) token(t *testing.T, document, password string) string {
 	return token
 }
 
-// freshUser inserts an active user of its own (random DNI) so a test can change it
-// without disturbing the shared demo accounts, and removes it afterwards.
-func (h harness) freshUser(t *testing.T) (document string, id uuid.UUID) {
-	t.Helper()
-	ctx := context.Background()
-	organizationID, id := ids.New(), ids.New()
-	document = fmt.Sprintf("9%07d", time.Now().UnixNano()%10_000_000)
-	hash, err := security.Argon2idHasher{}.Hash(demoPassword)
-	require.NoError(t, err)
-
-	_, err = h.pool.Exec(ctx, `INSERT INTO organizations (id, name) VALUES ($1, 'Cliente de prueba')`, organizationID)
-	require.NoError(t, err)
-	_, err = h.pool.Exec(ctx, `INSERT INTO users (id, organization_id, document_number, full_name, role, password_hash)
-		VALUES ($1, $2, $3, 'Persona de Prueba', 'owner', $4)`, id, organizationID, document, hash)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, _ = h.pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, organizationID)
-	})
-	return document, id
-}
-
 func TestLoginAndMeForEveryRole(t *testing.T) {
 	h := newHarness(t)
+	tn := h.newTenant(t)
+	superadmin := h.newSuperadmin(t)
 
 	cases := []struct {
 		name         string
@@ -149,11 +127,10 @@ func TestLoginAndMeForEveryRole(t *testing.T) {
 		gym          any
 		branches     []string
 	}{
-		{"superadmin", "10000001", "superadmin", nil, nil, nil},
-		{"owner", "10000002", "owner", "Grupo Atlas", nil, nil},
-		{"admin", "10000005", "admin", "Grupo Atlas", "Atlas Fitness", nil},
-		{"receptionist", "10000003", "receptionist", "Grupo Atlas", nil, []string{"Barranco", "Miraflores"}},
-		{"single-site owner", "10000004", "owner", "Gimnasio Central", nil, nil},
+		{"superadmin", superadmin, "superadmin", nil, nil, nil},
+		{"owner", tn.Owner, "owner", tn.OrganizationName, nil, nil},
+		{"admin", tn.Admin, "admin", tn.OrganizationName, tn.GymOneName, nil},
+		{"receptionist", tn.Receptionist, "receptionist", tn.OrganizationName, nil, []string{"Sede A", "Sede B"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -195,8 +172,9 @@ func TestLoginAndMeForEveryRole(t *testing.T) {
 func TestLoginFailuresAreIndistinguishable(t *testing.T) {
 	h := newHarness(t)
 
-	wrongPassword := h.login(t, "10000002", "not-the-password")
-	unknownUser := h.login(t, "99999991", demoPassword)
+	tn := h.newTenant(t)
+	wrongPassword := h.login(t, tn.Owner, "not-the-password")
+	unknownUser := h.login(t, uniqueDocument(), demoPassword)
 	assert.Equal(t, http.StatusUnauthorized, wrongPassword.status)
 	assert.Equal(t, http.StatusUnauthorized, unknownUser.status)
 	assert.Equal(t, "INVALID_CREDENTIALS", wrongPassword.errorCode())
@@ -322,7 +300,7 @@ func TestChangingThePassword(t *testing.T) {
 
 func TestDocumentLookups(t *testing.T) {
 	h := newHarness(t)
-	token := h.token(t, "10000003", demoPassword) // reception may look documents up too
+	token := h.token(t, h.newTenant(t).Receptionist, demoPassword) // reception may look documents up too
 
 	person := h.call(t, http.MethodGet, "/documents/persons/45678912", token, nil)
 	require.Equal(t, http.StatusOK, person.status, "%v", person.body)
@@ -350,51 +328,22 @@ func TestDocumentLookups(t *testing.T) {
 func TestDatabaseEnforcesTenancyAndRoleRules(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	hash, err := security.Argon2idHasher{}.Hash(demoPassword)
-	require.NoError(t, err)
-
-	otherOrganization, otherGym := ids.New(), ids.New()
-	_, err = h.pool.Exec(ctx, `INSERT INTO organizations (id, name) VALUES ($1, 'Otro cliente')`, otherOrganization)
-	require.NoError(t, err)
-	_, err = h.pool.Exec(ctx, `INSERT INTO gyms (id, organization_id, name) VALUES ($1, $2, 'Gym ajeno')`, otherGym, otherOrganization)
-	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = h.pool.Exec(ctx, `DELETE FROM organizations WHERE id = $1`, otherOrganization) })
+	hash := h.hash(t)
+	tn := h.newTenant(t)
+	other := h.newTenant(t)
 
 	insert := func(document, role string, organization, gym any) error {
 		_, err := h.pool.Exec(ctx, `INSERT INTO users (id, organization_id, gym_id, document_number, full_name, role, password_hash)
 			VALUES ($1, $2, $3, $4, 'Persona', $5, $6)`, ids.New(), organization, gym, document, role, hash)
 		return err
 	}
-	atlas := "019a0000-0000-7000-8000-000000000001"
 
-	assert.Error(t, insert("98000001", "admin", atlas, otherGym), "an admin cannot manage a gym of another organization")
-	assert.Error(t, insert("98000002", "owner", nil, nil), "an owner needs an organization")
-	assert.Error(t, insert("98000003", "superadmin", atlas, nil), "the superadmin belongs to no organization")
-	assert.Error(t, insert("98000004", "admin", atlas, nil), "an admin needs a gym")
-	assert.Error(t, insert("98000005", "cashier", atlas, nil), "unknown roles are refused")
-	assert.Error(t, insert("1000000", "owner", atlas, nil), "a DNI has eight digits")
-	assert.Error(t, insert("10000002", "owner", atlas, nil), "the DNI is the login: it is unique")
-}
-
-func TestCreatingASuperadminByHand(t *testing.T) {
-	h := newHarness(t)
-	ctx := context.Background()
-	document := fmt.Sprintf("97%06d", time.Now().UnixNano()%1_000_000)
-	t.Cleanup(func() {
-		_, _ = h.pool.Exec(context.Background(), `DELETE FROM users WHERE document_number = $1`, document)
-	})
-
-	var validation *domain.ValidationError
-	require.ErrorAs(t, accounts.CreateSuperadmin(ctx, h.pool, "abc", "x", "short"), &validation)
-	assert.Len(t, validation.Issues, 3, "bad DNI, bad name and weak password are all reported")
-
-	require.NoError(t, accounts.CreateSuperadmin(ctx, h.pool, document, "  Soporte   Atmósfera ", "UnaClaveSegura1"))
-	assert.ErrorIs(t, accounts.CreateSuperadmin(ctx, h.pool, document, "Otro Nombre", "UnaClaveSegura1"), domain.ErrDocumentTaken)
-
-	token := h.token(t, document, "UnaClaveSegura1")
-	me := h.call(t, http.MethodGet, "/me", token, nil)
-	require.Equal(t, http.StatusOK, me.status)
-	assert.Equal(t, "superadmin", me.data()["role"])
-	assert.Equal(t, "Soporte Atmósfera", me.data()["full_name"])
-	assert.Nil(t, me.data()["organization"])
+	assert.Error(t, insert(uniqueDocument(), "admin", tn.OrganizationID, other.GymOne), "an admin cannot manage a gym of another organization")
+	assert.Error(t, insert(uniqueDocument(), "owner", nil, nil), "an owner needs an organization")
+	assert.Error(t, insert(uniqueDocument(), "superadmin", tn.OrganizationID, nil), "the superadmin belongs to no organization")
+	assert.Error(t, insert(uniqueDocument(), "admin", tn.OrganizationID, nil), "an admin needs a gym")
+	assert.Error(t, insert(uniqueDocument(), "cashier", tn.OrganizationID, nil), "unknown roles are refused")
+	assert.Error(t, insert("1000000", "owner", tn.OrganizationID, nil), "a DNI has eight digits")
+	assert.Error(t, insert(tn.Owner, "owner", tn.OrganizationID, nil), "the DNI is the login: it is unique")
+	assert.NoError(t, insert(uniqueDocument(), "admin", tn.OrganizationID, tn.GymTwo), "an admin of its own organization's gym is fine")
 }

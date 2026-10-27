@@ -38,17 +38,33 @@ cp .env.example .env        # fill DATABASE_URL (same password) and JWT_ACCESS_S
 
 # 3. Migrate, load the demo accounts, run
 scripts/dev.sh migrate up
-scripts/dev.sh seed-dev     # DNI 10000001..10000005, password Pulso2026! (same as the web demo)
-scripts/dev.sh              # http://localhost:3001/api/v1/health
+go run ./scripts/first-superadmin     # prints the INSERT of your first user; run it in psql (see below)
+scripts/dev.sh                        # http://localhost:3001/api/v1/health
 ```
+
+There is **no seed**: the database starts empty. Create your first user with the tool below, then
+everything else (clients, gyms, branches, team) is created through the API itself, as in production.
+
+## The first superadmin (manual, on purpose)
+
+The application has no seed and no "create superadmin" code. The first user is inserted by hand:
 
 ```sh
-curl -s localhost:3001/api/v1/auth/login -H 'Content-Type: application/json' \
-  -d '{"document_number":"10000002","password":"Pulso2026!"}'
+go run ./scripts/first-superadmin
 ```
 
-The demo DNIs match the web prototype: `10000001` superadmin, `10000002` owner of Grupo Atlas,
-`10000005` admin of Atlas Fitness, `10000003` receptionist, `10000004` owner of Gimnasio Central.
+It asks for the DNI, the full name and a password (hidden, twice) and **prints** an `INSERT` with the
+argon2id hash; it never touches a database and the password never leaves your machine. Run the
+statement yourself:
+
+```sh
+# local database
+go run ./scripts/first-superadmin | docker exec -i atmosfera-postgres psql -v ON_ERROR_STOP=1 -U postgres -d pulso
+# production (when the time comes)
+go run ./scripts/first-superadmin | ssh atmosfera 'docker exec -i atm-postgres psql -v ON_ERROR_STOP=1 -U postgres -d pulso'
+```
+
+Then sign in: `POST /api/v1/auth/login` with that DNI and password.
 
 ## Tests
 
@@ -99,15 +115,8 @@ this is what exists there and how to rebuild it if it is ever lost:
    `docker exec identity-api /app/identity-api create-client-system pulso "Pulso"`.
 4. The nginx site `pulso-api.atmosferast.com` → `127.0.0.1:3081` (the wildcard origin certificate).
 
-**After the first deploy**, create the superadmin (there is no registration). The password is read from an
-environment variable, never from the command line, so it stays out of the shell history:
-
-```sh
-cd /opt/pulso-api && docker compose run --rm -e SUPERADMIN_PASSWORD='<a long password>' \
-  app create-superadmin <dni> "<full name>"
-```
-
-(Locally: `SUPERADMIN_PASSWORD=... scripts/dev.sh create-superadmin <dni> "<full name>"`.)
+**After the first deploy**, insert the first superadmin by hand with `go run ./scripts/first-superadmin`
+(see "The first superadmin" above). There is no command for it in the container.
 
 The container is `pulso-api`, on the shared `atm-network`, published only on `127.0.0.1:3081`. The web
 calls the API across origins; the token travels in the `Authorization` header, never in a cookie.

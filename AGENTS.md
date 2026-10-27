@@ -16,7 +16,7 @@ it owns *gyms*, and each gym has *branches*. Members, payments, access control a
 
 Business rules that shape the code:
 
-- **Pulso is free within limits**: 1 gym and up to 3 branches per gym per client. Anything
+- **Pulso is free within limits**: 1 gym and up to 1 branch per gym per client. Anything
   beyond is agreed with Atmósfera, which creates it (and charges for it). Owners and admins
   can never create gyms or branches themselves. The limits live in one place, in code, when
   that module is built.
@@ -40,8 +40,8 @@ error codes: **English only**. The only Spanish allowed is what an end user read
 | sede | `branch` |
 | propietario / administrador / recepción | `owner` / `admin` / `receptionist` |
 
-Names are always stored split, never as one `full_name` for people from a lookup; a `full_name`
-may be computed in a response. (A user's own display name is stored as `full_name`.)
+A document lookup (identity-api) answers split names. Pulso stores a person's name as one
+`full_name`, exactly as the web captures it (members, users, day pass customers).
 
 ## 3. Stack
 
@@ -59,7 +59,7 @@ does) when a module has enough queries to justify it; do not mix both inside one
 One binary, one deploy. Each module is independent as if it were a service.
 
 ```
-cmd/api/main.go          wiring only: config, modules, routes (subcommands: migrate, healthcheck, seed-dev)
+cmd/api/main.go          wiring only: config, modules, routes (subcommands: migrate, healthcheck)
 internal/
   platform/              shared infrastructure with NO business rules
     config database httpserver logger clock ids middleware apierror auth health testsupport
@@ -156,8 +156,10 @@ parameter. The database backs this up with composite foreign keys and `CHECK` co
   Never put a secret in the repo, in a commit or in a log.
 - Document numbers and names are personal data (Peru Law 29733): never log a full document
   number, never log request bodies or headers (they carry tokens and passwords).
-- The superadmin account and its password are created by hand on the server. `seed-dev`
-  (fictional accounts with a known password) **refuses to run in production**.
+- **There is no seed and no "create superadmin" logic in the application, on purpose.** The
+  first superadmin is inserted by hand, with a statement printed by `scripts/first-superadmin`
+  (see README). Never add code that creates users with known passwords, and never commit one.
+- Tests build their own data (see `docs/testing.md`) and delete it afterwards.
 
 ## 9. Branches and deployment
 
@@ -187,4 +189,22 @@ is sent in the `Authorization` header, never in a cookie.
   Integration tests need a migrated PostgreSQL and are skipped without `TEST_DATABASE_URL`;
   run them with: `TEST_DATABASE_URL='postgres://…/pulso_test?sslmode=disable&search_path=pulso' go test -race ./...`
 - Tests never call the real identity API; they use `identity.Fake` or `httptest`.
+- Tests create the data they need with helpers (`internal/integration/fixtures_test.go` is the
+  model) and remove it when they end; nothing is shared and nothing is seeded.
 - Keep changes small and in the layout above. Do not reopen decisions in this file without asking the owner.
+
+## 11. Implementation plans and who does what
+
+The plans that turn this API (and the web) into the real product are in `docs/`. **Start at
+[docs/README.md](docs/README.md)**: it says what to read, in what order, how to work and when a
+plan is done.
+
+Boundaries for whoever implements them (human or AI):
+
+- Work **locally only**: local PostgreSQL, local API, local web. Never connect to the production
+  server, never read or write its `.env`, never push to `production` and never deploy. When all
+  the plans are done, the owner's assistant deploys (docs/plans/06-hardening-and-release.md).
+- Commit to `main` locally in small Conventional Commits. Do not push unless the owner asks.
+- Migrations `00001` and `00002` are already applied in production: **never edit them**; every
+  schema change is a new migration file.
+- If a rule is missing or ambiguous, ask the owner; do not invent business rules.
