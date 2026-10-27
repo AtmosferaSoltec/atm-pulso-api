@@ -94,7 +94,8 @@ func CORS(allowed []string) gin.HandlerFunc {
 			h.Set("Access-Control-Expose-Headers", RequestIDHeader+", Retry-After")
 			if c.Request.Method == http.MethodOptions {
 				h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-				h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, "+RequestIDHeader)
+				// X-Organization-Id is how the superadmin inspects one client (GET only).
+				h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Organization-Id, "+RequestIDHeader)
 				h.Set("Access-Control-Max-Age", "600")
 				c.AbortWithStatus(http.StatusNoContent)
 				return
