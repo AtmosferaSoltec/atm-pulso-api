@@ -30,3 +30,8 @@ creates a receptionist, receptionist enrolls a member, checks them in, sells a d
 ## Do not
 
 Do not push, deploy, change workflows, touch the server or run anything against production. The deployer does that after the web is also finished.
+
+## Completion — 2026-10-27
+
+Done and described in `docs/RELEASE.md`: contract test (`TestOpenAPIListsExactlyTheRegisteredRoutes`), security headers, migrations up/down verified (empty and production state),
+volume check with EXPLAIN-backed timings (member list optimized 13x), owner-journey test, README and release notes. Not done on purpose: deploy, push, workflow changes.

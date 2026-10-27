@@ -12,7 +12,7 @@ Hand-over for whoever deploys. Nothing here was pushed or deployed: everything w
 | API-05 | Payments report with totals, CSV export, dashboard |
 | API-06 | Contract test (code = `openapi.yaml`), security headers, migration and volume checks, owner-journey test |
 
-The API has 33 operations; `docs/openapi.yaml` is the contract the web generates its types from.
+The API has 39 operations over 33 paths; `docs/openapi.yaml` is the contract the web generates its types from.
 
 ## Migrations to apply (in order, automatic with `api migrate up`)
 
