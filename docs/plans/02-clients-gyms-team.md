@@ -191,3 +191,10 @@ curl -s $API/clients -H "Authorization: Bearer $TOKEN" | jq '.data[0].plan'
 
 The definition of done in docs/README.md, plus: WEB-02 can be implemented using only `openapi.yaml`, and the
 owner reviewed the summary.
+
+## Implementation review — 2026-10-27
+
+- Changes: reviewed the prerequisite documents and API-02/WEB-01/WEB-02 before implementation. No application code or contract changes yet; no verification claims.
+- Gaps: the team endpoint section forbids superadmin reads, while the required inspection test and business-rules §2 allow them. The team rules describe foreign body references as 400 `SCOPE_NOT_ALLOWED`, but the error table assigns that code 403. Resolve these contradictions before implementing the contract.
+- Questions for the owner: approve the Q-PASSWORD, Q-LOGO and Q-DNI-EDIT defaults; confirm superadmin inspection of `GET /users`; confirm 400 for foreign-organization body references, 404 for foreign path resources, and 403 for inaccessible same-organization scope.
+- Status: API-02 is pending these decisions. Later plans have not started. WEB-01's instruction to retain E2E data conflicts with the owner's explicit cleanup requirement; implementation must use isolated fixtures and remove them after tests.
