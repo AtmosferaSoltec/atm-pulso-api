@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/google/uuid"
@@ -26,14 +27,18 @@ func readCatalog(ctx context.Context, q queryReader, organizationID uuid.UUID) (
 		return app.Catalog{}, err
 	}
 	rows, err := q.Query(ctx, `SELECT id,name,display_name,tax_id,brand_color,COALESCE(day_pass_price,$2::numeric(14,2))::text,
- day_pass_price IS NULL,branch_sharing FROM gyms WHERE organization_id=$1 ORDER BY name,id`, organizationID, domain.DefaultDayPassPrice)
+ day_pass_price IS NULL,branch_sharing,membership_prices FROM gyms WHERE organization_id=$1 ORDER BY name,id`, organizationID, domain.DefaultDayPassPrice)
 	if err != nil {
 		return app.Catalog{}, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		gym := app.Gym{Branches: []app.Branch{}}
-		if err := rows.Scan(&gym.ID, &gym.Name, &gym.DisplayName, &gym.TaxID, &gym.BrandColor, &gym.DayPassPrice, &gym.DayPassPriceIsDefault, &gym.BranchSharing); err != nil {
+		var prices []byte
+		if err := rows.Scan(&gym.ID, &gym.Name, &gym.DisplayName, &gym.TaxID, &gym.BrandColor, &gym.DayPassPrice, &gym.DayPassPriceIsDefault, &gym.BranchSharing, &prices); err != nil {
+			return app.Catalog{}, err
+		}
+		if err := json.Unmarshal(prices, &gym.MembershipPrices); err != nil {
 			return app.Catalog{}, err
 		}
 		catalog.Gyms = append(catalog.Gyms, gym)

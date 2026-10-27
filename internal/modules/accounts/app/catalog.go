@@ -27,7 +27,15 @@ type Gym struct {
 	DayPassPrice          string    `json:"day_pass_price"`
 	DayPassPriceIsDefault bool      `json:"day_pass_price_is_default"`
 	BranchSharing         bool      `json:"branch_sharing"`
-	Branches              []Branch  `json:"branches"`
+	// MembershipPrices is the gym's base price per duration, ordered by months.
+	MembershipPrices []MembershipPrice `json:"membership_prices"`
+	Branches         []Branch          `json:"branches"`
+}
+
+// MembershipPrice is the base price of a membership of the given whole months.
+type MembershipPrice struct {
+	Months int    `json:"months"`
+	Amount string `json:"amount"`
 }
 
 type Branch struct {
