@@ -1,0 +1,8 @@
+.git
+.github
+.env
+.env.*
+docs
+scripts
+*.md
+/api
