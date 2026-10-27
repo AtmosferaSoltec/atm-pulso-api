@@ -82,3 +82,14 @@ Error codes: `MEMBER_NOT_FOUND`, `BRANCH_NOT_ACCESSIBLE`, plus field codes `AMOU
 ## Done when
 
 docs/README.md's definition of done; WEB-04 can be built from `openapi.yaml`.
+
+## Completion — 2026-10-27
+
+- Implemented module `access` (pure `Decide` with table tests, use cases, PostgreSQL adapter, HTTP), migration `00006`
+  (`access_entries`, `day_passes`, FK from `payments`), `platform/branchdir` (shared branch reader, also used by `members`).
+  Endpoints: `POST /access/checks`, `GET /access/events`, `GET /access/summary`, `GET/POST /day-passes`, `GET /day-passes/{id}`; in `openapi.yaml`.
+  The printable day pass receipt is `GET /receipts/{id}` (shows the optional visitor).
+- Decisions where the documents disagreed (business-rules wins): an unknown document is a logged `200` denial with `NOT_REGISTERED` (not a 404; only an unknown `member_id` is 404);
+  the day pass price is the gym's and the client cannot choose it (an `amount` is accepted only if it equals the price), so Q-DAYPASS-AMOUNT is answered "no".
+- Verified: `gofmt`, `go vet`, `golangci-lint` 0 issues, `go test ./... -race` green; 15 concurrent day passes get `D-000001..D-000015`; the test database ends with 0 rows.
+- Gaps: access entries have no retention policy (kept forever).

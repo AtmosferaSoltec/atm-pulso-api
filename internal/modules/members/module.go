@@ -9,6 +9,7 @@ import (
 	membershttp "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members/adapters/http"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members/adapters/postgres"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members/app"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/branchdir"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
 )
 
@@ -23,7 +24,7 @@ type Module struct{ handler *membershttp.Handler }
 
 // New wires repository, directory, use cases and HTTP by hand.
 func New(deps Deps) *Module {
-	service := &app.Service{Repo: postgres.NewRepository(deps.Pool), Directory: postgres.NewDirectory(deps.Pool), Clock: deps.Clock}
+	service := &app.Service{Repo: postgres.NewRepository(deps.Pool), Directory: branchdir.New(deps.Pool), Clock: deps.Clock}
 	return &Module{handler: membershttp.NewHandler(service)}
 }
 

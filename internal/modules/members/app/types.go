@@ -9,20 +9,15 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members/domain"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/branchdir"
 )
 
 // BranchInfo is a branch of the organization with its gym.
-type BranchInfo struct {
-	ID            uuid.UUID
-	GymID         uuid.UUID
-	Name          string
-	GymName       string
-	BranchSharing bool
-}
+type BranchInfo = branchdir.Info
 
 // Directory reads the organization's branches (owned by the accounts module; read-only).
 type Directory interface {
-	// Branch returns domain.ErrBranchNotFound when it is not in the organization.
+	// Branch returns branchdir.ErrNotFound when it is not in the organization.
 	Branch(ctx context.Context, organizationID, branchID uuid.UUID) (BranchInfo, error)
 	Branches(ctx context.Context, organizationID uuid.UUID) ([]BranchInfo, error)
 }

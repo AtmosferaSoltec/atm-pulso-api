@@ -18,6 +18,7 @@ import (
 
 	"github.com/AtmosferaSoltec/atm-pulso-api/db"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/identity"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/access"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members"
@@ -112,6 +113,7 @@ func run() int {
 	documentsModule.Routes(protected)
 	scope := auth.OrganizationScope(accountsModule.Organizations())
 	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
+	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
 
 	if err := httpserver.Serve(ctx, router, cfg.Port, log); err != nil {
 		log.Error("server", "error", err)

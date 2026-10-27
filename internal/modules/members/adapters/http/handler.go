@@ -13,6 +13,7 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members/domain"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/apierror"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/branchdir"
 )
 
 // Handler serves /members and /receipts.
@@ -224,7 +225,7 @@ func respond(c *gin.Context, err error) {
 		apierror.Respond(c, apierror.New(http.StatusNotFound, "MEMBER_NOT_FOUND", "El miembro ya no existe."))
 	case errors.Is(err, domain.ErrReceiptNotFound):
 		apierror.Respond(c, apierror.ErrNotFound)
-	case errors.Is(err, domain.ErrBranchNotFound):
+	case errors.Is(err, branchdir.ErrNotFound):
 		apierror.Respond(c, apierror.New(http.StatusBadRequest, "SCOPE_NOT_ALLOWED", "La sede no está disponible."))
 	case errors.Is(err, domain.ErrBranchNotAccessible):
 		apierror.Respond(c, apierror.New(http.StatusForbidden, "BRANCH_NOT_ACCESSIBLE", "No tienes acceso a esta sede."))

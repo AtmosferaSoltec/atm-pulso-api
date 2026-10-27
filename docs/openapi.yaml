@@ -775,6 +775,155 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/ApiError" }
 
+  /access/checks:
+    post:
+      tags: [access]
+      summary: Check a member in at a branch (decided on the server, always logged).
+      description: |
+        Send `member_id` or `document_number`. A denied check is still `200` with `allowed: false` and a `reason`:
+        MEMBERSHIP_VALID, MEMBERSHIP_EXPIRED (ends_on = last end), MEMBERSHIP_NOT_STARTED (ends_on = start date),
+        BRANCH_NOT_ALLOWED, NOT_REGISTERED. An allowed answer ending within 7 days has `expiring_in_days`.
+        Unknown `member_id` is 404 MEMBER_NOT_FOUND. Repeating the same `id` returns the original answer without a second entry.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch_id]
+              properties:
+                id: { type: string, format: uuid }
+                branch_id: { type: string, format: uuid }
+                member_id: { type: string, format: uuid }
+                document_number: { type: string }
+      responses:
+        "200": { description: The decision., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/AccessCheck" } } } } } }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "404": { $ref: "#/components/responses/ApiError" }
+  /access/events:
+    get:
+      tags: [access]
+      summary: History of access entries (checks and day passes), newest first.
+      description: Owner sees the organization, admin its gym, reception its assigned branches. A `branch_id` the caller cannot reach is 403 BRANCH_NOT_ACCESSIBLE.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: branch_id, in: query, schema: { type: string, format: uuid } }
+        - { name: result, in: query, schema: { type: string, enum: [allowed, denied] } }
+        - { name: from, in: query, schema: { type: string, format: date }, description: Lima date, inclusive. }
+        - { name: to, in: query, schema: { type: string, format: date }, description: Lima date, inclusive. }
+        - { name: q, in: query, schema: { type: string }, description: Name or document (contains). }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses:
+        "200":
+          description: A page of entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/AccessEvent" } }
+                  meta: { $ref: "#/components/schemas/Pagination" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+  /access/summary:
+    get:
+      tags: [access]
+      summary: Allowed and denied checks and day passes of one Lima day.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: branch_id, in: query, schema: { type: string, format: uuid } }
+        - { name: date, in: query, schema: { type: string, format: date }, description: Defaults to today (Lima). }
+      responses:
+        "200":
+          description: The counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    required: [allowed, denied, day_passes]
+                    properties:
+                      allowed: { type: integer }
+                      denied: { type: integer }
+                      day_passes: { type: integer }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+  /day-passes:
+    get:
+      tags: [access]
+      summary: List day passes of the branches the caller reaches.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: branch_id, in: query, schema: { type: string, format: uuid } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses:
+        "200":
+          description: A page of day passes.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/DayPass" } }
+                  meta: { $ref: "#/components/schemas/Pagination" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+    post:
+      tags: [access]
+      summary: Sell a day pass (pass, receipt D-NNNNNN, payment and an allowed entry in one transaction).
+      description: |
+        The price is the gym's (15.00 when it has none); the client cannot choose it. An `amount` is accepted only when it equals the price
+        (otherwise VALIDATION_FAILED, AMOUNT_NOT_ALLOWED). Every `visitor` field is optional. Repeating the same `id` returns the original with 200.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch_id, method]
+              properties:
+                id: { type: string, format: uuid }
+                branch_id: { type: string, format: uuid }
+                method: { type: string, enum: [yape_plin, cash, card, transfer] }
+                amount: { type: string, description: Optional; must equal the gym price. }
+                visitor:
+                  type: object
+                  properties:
+                    document_type: { type: string, enum: [dni, ce] }
+                    document_number: { type: string }
+                    full_name: { type: string }
+                    phone: { type: string, pattern: "^9[0-9]{8}$" }
+      responses:
+        "200": { description: Repeated request; the original., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/DayPass" } } } } } }
+        "201": { description: Created., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/DayPass" } } } } } }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+  /day-passes/{id}:
+    get:
+      tags: [access]
+      summary: One day pass. Print it with GET /receipts/{receipt.id}.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: The day pass., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/DayPass" } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ApiError" }
+
   /me/password:
     post:
       tags: [profile]
@@ -1196,6 +1345,56 @@ components:
           properties:
             amount: { type: string }
             method: { type: string }
+    AccessCheck:
+      type: object
+      required: [event_id, allowed, reason, expiring_in_days, ends_on, member, checked_at]
+      properties:
+        event_id: { type: string, format: uuid }
+        allowed: { type: boolean }
+        reason: { type: string, enum: [MEMBERSHIP_VALID, MEMBERSHIP_EXPIRED, MEMBERSHIP_NOT_STARTED, BRANCH_NOT_ALLOWED, NOT_REGISTERED] }
+        expiring_in_days: { type: [integer, "null"] }
+        ends_on: { type: [string, "null"], format: date }
+        member:
+          oneOf:
+            - type: object
+              properties:
+                id: { type: string, format: uuid }
+                full_name: { type: string }
+                document_number: { type: string }
+            - { type: "null" }
+        checked_at: { type: string, format: date-time, description: Server time. }
+    AccessEvent:
+      type: object
+      required: [id, checked_at, branch, kind, allowed, reason, display_name, document_number, member_id]
+      properties:
+        id: { type: string, format: uuid }
+        checked_at: { type: string, format: date-time }
+        branch:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+        kind: { type: string, enum: [check, day_pass] }
+        allowed: { type: boolean }
+        reason: { type: string, enum: [MEMBERSHIP_VALID, MEMBERSHIP_EXPIRED, MEMBERSHIP_NOT_STARTED, BRANCH_NOT_ALLOWED, NOT_REGISTERED, DAY_PASS] }
+        display_name: { type: string }
+        document_number: { type: [string, "null"] }
+        member_id: { type: [string, "null"], format: uuid }
+    DayPass:
+      type: object
+      required: [id, receipt, branch, amount, method, visitor_name, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        receipt: { $ref: "#/components/schemas/ReceiptRef" }
+        branch:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+        amount: { type: string, example: "15.00" }
+        method: { type: string, enum: [yape_plin, cash, card, transfer] }
+        visitor_name: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
     Session:
       type: object
       properties:

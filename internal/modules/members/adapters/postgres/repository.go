@@ -1,3 +1,4 @@
+// Package postgres is the persistence adapter of members.
 package postgres
 
 import (
@@ -362,15 +363,15 @@ func (r *Repository) Receipt(ctx context.Context, organizationID, receiptID uuid
 	var kind string
 	var number int
 	var issued time.Time
-	var memberID, membershipID *uuid.UUID
+	var memberID, membershipID, dayPassID *uuid.UUID
 	err := r.pool.QueryRow(ctx, `SELECT r.id, r.kind, r.number, r.issued_on, COALESCE(g.display_name, g.name), g.tax_id, g.brand_color,
-			b.name, b.address, p.amount::text, p.method, p.member_id, p.membership_id
+			b.name, b.address, p.amount::text, p.method, p.member_id, p.membership_id, p.day_pass_id
 		FROM receipts r JOIN payments p ON p.receipt_id = r.id AND p.organization_id = r.organization_id
 		JOIN branches b ON b.id = r.branch_id AND b.organization_id = r.organization_id
 		JOIN gyms g ON g.id = b.gym_id AND g.organization_id = b.organization_id
 		WHERE r.id = $1 AND r.organization_id = $2`, receiptID, organizationID).
 		Scan(&d.ID, &kind, &number, &issued, &d.Gym.Name, &d.Gym.TaxID, &d.Gym.BrandColor, &d.Branch.Name, &d.Branch.Address,
-			&d.Payment.Amount, &d.Payment.Method, &memberID, &membershipID)
+			&d.Payment.Amount, &d.Payment.Method, &memberID, &membershipID, &dayPassID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return d, domain.ErrReceiptNotFound
 	}
@@ -385,6 +386,27 @@ func (r *Repository) Receipt(ctx context.Context, organizationID, receiptID uuid
 			return d, err
 		}
 		d.Member = &m
+	}
+	if dayPassID != nil {
+		// The optional customer of a day pass is shown like a member, when there is anything to show.
+		var kind, number, name, phone *string
+		if err := r.pool.QueryRow(ctx, `SELECT customer_document_type, customer_document_number, customer_name, customer_phone FROM day_passes WHERE id=$1 AND organization_id=$2`,
+			*dayPassID, organizationID).Scan(&kind, &number, &name, &phone); err != nil {
+			return d, err
+		}
+		if name != nil || number != nil || phone != nil {
+			visitor := app.ReceiptMember{FullName: "Visitante"}
+			if name != nil {
+				visitor.FullName = *name
+			}
+			if kind != nil && number != nil {
+				visitor.DocumentType, visitor.DocumentNumber = *kind, *number
+			}
+			if phone != nil {
+				visitor.Phone = *phone
+			}
+			d.Member = &visitor
+		}
 	}
 	if membershipID != nil {
 		var m app.ReceiptMembership

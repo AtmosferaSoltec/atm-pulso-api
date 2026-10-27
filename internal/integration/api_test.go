@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/identity"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/access"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/adapters/security"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
@@ -60,6 +61,7 @@ func newHarness(t *testing.T) harness {
 	documents.New(identity.Fake{}).Routes(protected)
 	scope := auth.OrganizationScope(accountsModule.Organizations())
 	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
+	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
 	return harness{router: router, pool: pool}
 }
 

@@ -11,8 +11,6 @@ var (
 	ErrMemberNotFound = errors.New("member not found")
 	// ErrReceiptNotFound: the receipt does not exist in the organization.
 	ErrReceiptNotFound = errors.New("receipt not found")
-	// ErrBranchNotFound: the branch does not exist in the organization.
-	ErrBranchNotFound = errors.New("branch not found")
 	// ErrBranchNotAccessible: the user cannot work in that branch.
 	ErrBranchNotAccessible = errors.New("branch not accessible")
 	// ErrForbidden: the role cannot do this (the superadmin only consults).
