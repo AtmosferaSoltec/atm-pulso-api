@@ -1391,18 +1391,21 @@ components:
         issued_on: { type: string, format: date }
         gym:
           type: object
+          required: [name, tax_id, brand_color]
           properties:
             name: { type: string, description: The display name when the gym has one. }
             tax_id: { type: [string, "null"] }
             brand_color: { type: string }
         branch:
           type: object
+          required: [name, address]
           properties:
             name: { type: string }
             address: { type: [string, "null"] }
         member:
           oneOf:
             - type: object
+              required: [full_name, document_type, document_number, phone]
               properties:
                 full_name: { type: string }
                 document_type: { type: string }
@@ -1412,6 +1415,7 @@ components:
         membership:
           oneOf:
             - type: object
+              required: [months, plan_label, starts_on, ends_on, access_branches]
               properties:
                 months: { type: integer }
                 plan_label: { type: string }
@@ -1421,6 +1425,7 @@ components:
             - { type: "null" }
         payment:
           type: object
+          required: [amount, method]
           properties:
             amount: { type: string }
             method: { type: string }
@@ -1436,6 +1441,7 @@ components:
         member:
           oneOf:
             - type: object
+              required: [id, full_name, document_number]
               properties:
                 id: { type: string, format: uuid }
                 full_name: { type: string }
@@ -1450,6 +1456,7 @@ components:
         checked_at: { type: string, format: date-time }
         branch:
           type: object
+          required: [id, name]
           properties:
             id: { type: string, format: uuid }
             name: { type: string }
@@ -1467,6 +1474,7 @@ components:
         receipt: { $ref: "#/components/schemas/ReceiptRef" }
         branch:
           type: object
+          required: [id, name]
           properties:
             id: { type: string, format: uuid }
             name: { type: string }
@@ -1488,6 +1496,7 @@ components:
         member:
           oneOf:
             - type: object
+              required: [id, full_name]
               properties:
                 id: { type: string, format: uuid }
                 full_name: { type: string }
@@ -1495,6 +1504,7 @@ components:
         visitor_name: { type: [string, "null"] }
         branch:
           type: object
+          required: [id, name]
           properties:
             id: { type: string, format: uuid }
             name: { type: string }
@@ -1509,6 +1519,7 @@ components:
         top_method: { type: [string, "null"] }
         by_method:
           type: object
+          required: [yape_plin, cash, card, transfer]
           description: The four methods, always present ("0.00" when unused).
           properties:
             yape_plin: { type: string }
@@ -1522,6 +1533,7 @@ components:
         date: { type: string, format: date }
         members:
           type: object
+          required: [active, expiring, expired, scheduled]
           description: The web shows "Vigentes" as active + expiring.
           properties:
             active: { type: integer }
@@ -1530,11 +1542,13 @@ components:
             scheduled: { type: integer }
         income:
           type: object
+          required: [today, month]
           properties:
             today: { type: string }
             month: { type: string }
         access:
           type: object
+          required: [allowed_today, denied_today]
           properties:
             allowed_today: { type: integer }
             denied_today: { type: integer }
@@ -1542,6 +1556,7 @@ components:
           type: array
           items:
             type: object
+            required: [member_id, full_name, ends_on, days_remaining, phone]
             properties:
               member_id: { type: string, format: uuid }
               full_name: { type: string }
@@ -1585,6 +1600,7 @@ components:
               gym_name: { type: string }
     Named:
       type: object
+      required: [id, name]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
