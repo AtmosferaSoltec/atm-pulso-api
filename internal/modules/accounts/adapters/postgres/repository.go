@@ -23,7 +23,7 @@ type Repository struct {
 // NewRepository returns a repository on pool.
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
-const userColumns = `id, organization_id, gym_id, document_number, full_name, phone, role, is_active, password_version`
+const userColumns = `id, organization_id, gym_id, document_number, full_name, phone, role, is_active, password_version, must_change_password`
 
 func scanUser(row pgx.Row, extra ...any) (domain.User, error) {
 	var (
@@ -33,7 +33,7 @@ func scanUser(row pgx.Row, extra ...any) (domain.User, error) {
 		phone        *string
 		role         string
 	)
-	dest := append([]any{&user.ID, &organization, &gym, &user.DocumentNumber, &user.FullName, &phone, &role, &user.IsActive, &user.PasswordVersion}, extra...)
+	dest := append([]any{&user.ID, &organization, &gym, &user.DocumentNumber, &user.FullName, &phone, &role, &user.IsActive, &user.PasswordVersion, &user.MustChangePassword}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.User{}, domain.ErrUserNotFound
@@ -157,12 +157,12 @@ func (r *Repository) UpdateProfile(ctx context.Context, id uuid.UUID, fullName, 
 }
 
 // UpdatePassword stores a new hash and bumps the password version, which kills older tokens.
-func (r *Repository) UpdatePassword(ctx context.Context, id uuid.UUID, passwordHash string, at time.Time) (int, error) {
+func (r *Repository) UpdatePassword(ctx context.Context, id uuid.UUID, expectedVersion int, passwordHash string, at time.Time) (int, error) {
 	var version int
 	err := r.pool.QueryRow(ctx, `
-		UPDATE users SET password_hash = $2, password_version = password_version + 1, updated_at = $3
-		WHERE id = $1
-		RETURNING password_version`, id, passwordHash, at).Scan(&version)
+		UPDATE users SET password_hash = $2, password_version = password_version + 1, must_change_password = false, updated_at = $3
+		WHERE id = $1 AND password_version = $4 AND is_active
+		RETURNING password_version`, id, passwordHash, at, expectedVersion).Scan(&version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, domain.ErrUserNotFound
 	}

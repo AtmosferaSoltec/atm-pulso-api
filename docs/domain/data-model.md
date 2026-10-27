@@ -31,6 +31,11 @@ user_branches (user_id -> users, branch_id -> branches)         -- a receptionis
 
 ## API-02 adds
 
+- **`users.must_change_password`**: non-null boolean, false for existing accounts. New users and
+  manager resets set it true. Migration `00003` introduces this state without changing existing
+  passwords. Password updates compare `password_version` to prevent concurrent reset overwrite.
+
+
 - **`branches.organization_id`** (NOT NULL, backfilled from the gym; production is empty so it is trivial),
   `UNIQUE (id, organization_id)` and `FOREIGN KEY (gym_id, organization_id) REFERENCES gyms (id, organization_id)`.
   Every later table links to branches with `(branch_id, organization_id)`.

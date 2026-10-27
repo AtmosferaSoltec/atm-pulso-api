@@ -19,7 +19,8 @@ type User struct {
 	IsActive bool
 	// PasswordVersion is stamped in every token; a password change bumps it and so
 	// signs out all the older tokens.
-	PasswordVersion int
+	PasswordVersion    int
+	MustChangePassword bool
 }
 
 // Credentials is a user together with the stored password hash. It never leaves

@@ -20,6 +20,10 @@ belong to exactly one organization. Everything the user sees is in Spanish; iden
 | `receptionist` | the owner, or an admin for its own gym | its own | only the branches assigned to it |
 
 - A person can have only one user: the **DNI is the login** and is unique system-wide.
+- Only the authorized superior may correct a user's DNI: superadmin for owners, owner for
+  admins/receptionists, and admin for receptionists entirely within its gym. No self-correction.
+  Correction invalidates existing tokens. If a mandatory password change is pending, the temporary
+  password becomes the corrected DNI; otherwise the chosen password remains unchanged.
 - **Only an owner creates admins. An admin only creates receptionists**, and only for branches of
   its own gym. Nobody edits their own role or scope; nobody except the superadmin touches an owner.
 - Deactivating a user takes effect immediately (already guaranteed by `Authenticate`).
@@ -45,7 +49,9 @@ belong to exactly one organization. Everything the user sees is in Spanish; iden
 ## 3. Tenancy rules
 
 - Every query on business data filters by `organization_id` taken from the authenticated principal.
-- A resource of another organization answers **404, never 403** (do not reveal that it exists).
+- A resource of another organization addressed in a URL answers **404, never 403**. Foreign
+  organization references in a request body answer **400 SCOPE_NOT_ALLOWED**; inaccessible scope
+  within the same organization answers **403 SCOPE_NOT_ALLOWED**.
 - Branch access: an owner reaches all branches of its organization; an admin the branches of its
   gym; a receptionist the assigned ones (`auth.Principal.CanAccessBranch`). **Every endpoint that
   takes a `branch_id` checks it with that method.**
@@ -181,15 +187,26 @@ For the active branch: **active members** (`active + expiring`, members whose ho
 
 Per gym: `display_name`, `brand_color` (`#rrggbb`, six hex digits, lower case) and a logo. The color
 tints the web (buttons, selected items, receipts). Branches of one gym share the identity. Managed by
-the gym's admin or the owner. *(The logo needs storage: see the question Q-LOGO in API-02.)*
+the gym's admin or the owner. Logos and image uploads are deferred until all real functionality is implemented; future storage is Cloudflare R2.
 
 ## 15. Team  (`features/team`)
 
 - Fields: `full_name`, `document_number` (DNI), `role`, `gym_id` (admins), `branch_ids` (receptionists),
   `is_active`, optional `phone` (the user edits it in their profile).
-- The creator **sets an initial password** for the new user (minimum 8 characters) and tells it to them
-  out of band; there is no email. A manager (owner, or the admin of the user's gym; the superadmin for
-  owners) can **reset a password**, which signs the user out everywhere. *(Question Q-PASSWORD.)*
+- A newly created user's initial password is their DNI, hashed with argon2id. Creation accepts no
+  caller-selected password. `must_change_password` is true on creation and manager reset.
+- There is no email recovery. An authorized manager resets the password to the user's DNI, bumps
+  `password_version` to invalidate existing tokens, and requires another password change. The owner
+  manages admins and receptionists; an admin manages receptionists entirely within its gym; the
+  superadmin manages owners through platform operations.
+- Login with the temporary password returns a restricted token and `must_change_password: true`.
+  Until the password is changed, only `GET /me` and `POST /me/password` are available; every other
+  authenticated endpoint returns `403 PASSWORD_CHANGE_REQUIRED`.
+- Completing a required change clears the flag, invalidates all tokens and returns
+  `{ "data": { "login_required": true } }` without a replacement token. The web returns to login;
+  the user signs in with DNI and their new password before entering the application.
+- The new password has at least 8 characters and differs from the current password. Ordinary
+  voluntary profile password changes retain the existing fresh-token behavior.
 - A receptionist's branches must all belong to gyms the creator controls and there must be at least one.
 - An owner or admin can deactivate and reactivate users, never themselves. Deactivating never deletes
   history.
@@ -201,7 +218,7 @@ the gym's admin or the owner. *(The logo needs storage: see the question Q-LOGO 
 - Lists **clients** with: name, gyms (name, RUC) with their branches, the plan state ("Plan gratuito" or
   "N extras") and whether the client is active; searchable by client, gym or RUC; metrics: clients,
   gyms, branches, users of clients.
-- Creates a client: the owner (document, first and last names, email, phone, **initial password**) and
+- Creates a client: the owner (document, first and last names, email, phone, **DNI as temporary password**) and
   its gyms with branches. **The client's name is the owner's full name.** Adds gyms to a client and
   branches to a gym. See §4 for the plan limits and the agreement flag.
 - Email and phone of the owner are contact data of the organization; they are not login data.
@@ -209,7 +226,7 @@ the gym's admin or the owner. *(The logo needs storage: see the question Q-LOGO 
 ## 17. Profile  (`features/auth/components/ProfileDialog.tsx`)
 
 Every user (including the superadmin) sees their data, edits **name and phone**, and changes their
-password (current + new, minimum 8). The DNI, role and scope are read-only. Already built in API-01.
+password (current + new, minimum 8). The DNI, role and scope are read-only in the profile. Already built in API-01.
 
 ## 18. Formats and conventions
 

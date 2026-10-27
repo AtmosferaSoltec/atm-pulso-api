@@ -87,7 +87,7 @@ func (h *Handler) updateMe(c *gin.Context) {
 	apierror.OK(c, toUserDTO(profile))
 }
 
-// changePassword answers with a fresh token: the old ones stop working with the change.
+// changePassword invalidates old tokens and requests a new login after required changes.
 func (h *Handler) changePassword(c *gin.Context) {
 	var req passwordRequest
 	if !bind(c, &req) {
@@ -97,6 +97,12 @@ func (h *Handler) changePassword(c *gin.Context) {
 	session, err := h.service.ChangePassword(c.Request.Context(), principal.UserID, req.CurrentPassword, req.NewPassword)
 	if err != nil {
 		respond(c, err)
+		return
+	}
+	if session.LoginRequired {
+		apierror.OK(c, struct {
+			LoginRequired bool `json:"login_required"`
+		}{true})
 		return
 	}
 	apierror.OK(c, toSessionDTO(session, h.clock.Now()))

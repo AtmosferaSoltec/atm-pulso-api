@@ -36,15 +36,16 @@ type branchDTO struct {
 }
 
 type userDTO struct {
-	ID             string      `json:"id"`
-	DocumentType   string      `json:"document_type"`
-	DocumentNumber string      `json:"document_number"`
-	FullName       string      `json:"full_name"`
-	Phone          *string     `json:"phone"`
-	Role           string      `json:"role"`
-	Organization   *namedDTO   `json:"organization"`
-	Gym            *namedDTO   `json:"gym"`
-	Branches       []branchDTO `json:"branches"`
+	MustChangePassword bool        `json:"must_change_password"`
+	ID                 string      `json:"id"`
+	DocumentType       string      `json:"document_type"`
+	DocumentNumber     string      `json:"document_number"`
+	FullName           string      `json:"full_name"`
+	Phone              *string     `json:"phone"`
+	Role               string      `json:"role"`
+	Organization       *namedDTO   `json:"organization"`
+	Gym                *namedDTO   `json:"gym"`
+	Branches           []branchDTO `json:"branches"`
 }
 
 type sessionDTO struct {
@@ -58,12 +59,13 @@ type sessionDTO struct {
 func toUserDTO(profile app.Profile) userDTO {
 	user, scope := profile.User, profile.Scope
 	dto := userDTO{
-		ID:             user.ID.String(),
-		DocumentType:   "dni",
-		DocumentNumber: user.DocumentNumber,
-		FullName:       user.FullName,
-		Role:           string(user.Role),
-		Branches:       make([]branchDTO, 0, len(scope.Branches)),
+		MustChangePassword: user.MustChangePassword,
+		ID:                 user.ID.String(),
+		DocumentType:       "dni",
+		DocumentNumber:     user.DocumentNumber,
+		FullName:           user.FullName,
+		Role:               string(user.Role),
+		Branches:           make([]branchDTO, 0, len(scope.Branches)),
 	}
 	if user.Phone != "" {
 		dto.Phone = &user.Phone

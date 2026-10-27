@@ -27,3 +27,11 @@ every role has exactly the scope it needs (`CHECK`), and a DNI is unique system-
 
 ## Not here yet
 Creating and managing clients, gyms, branches and team members (plan 02).
+
+## Password onboarding
+
+`must_change_password` is loaded from the live user record and returned in the profile.
+Required changes return `data.login_required = true` without a token. Authentication middleware
+blocks all other routes except reading the profile and changing the password with
+`403 PASSWORD_CHANGE_REQUIRED`. Password updates use an expected version to avoid overwriting
+concurrent manager resets. Product rules are in `docs/domain/business-rules.md` §15.

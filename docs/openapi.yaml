@@ -91,6 +91,7 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/User" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/PasswordChangeRequired" }
     patch:
       tags: [profile]
       summary: Edit your own non-sensitive data (name and phone).
@@ -120,6 +121,7 @@ paths:
                   data: { $ref: "#/components/schemas/User" }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/PasswordChangeRequired" }
 
   /me/password:
     post:
@@ -127,7 +129,10 @@ paths:
       summary: Change your own password.
       description: |
         Every older token stops working at once and a fresh one is returned, so the user
-        stays signed in on this device. A wrong current password answers
+        stays signed in on this device for a voluntary change. When `must_change_password`
+        is true, completion returns `login_required: true` without a token; sign in again.
+        Restricted tokens only allow GET /me and POST /me/password; other authenticated
+        endpoints return 403 PASSWORD_CHANGE_REQUIRED. A wrong current password answers
         `CURRENT_PASSWORD_INCORRECT` with **400** (not 401, so the web does not read it as an
         ended session) and repeated failures are limited.
       security: [{ bearer: [] }]
@@ -149,9 +154,16 @@ paths:
               schema:
                 type: object
                 properties:
-                  data: { $ref: "#/components/schemas/Session" }
+                  data:
+                    oneOf:
+                      - $ref: "#/components/schemas/Session"
+                      - type: object
+                        required: [login_required]
+                        properties:
+                          login_required: { type: boolean, const: true }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/PasswordChangeRequired" }
         "429": { $ref: "#/components/responses/TooManyAttempts" }
 
   /documents/persons/{document_number}:
@@ -173,6 +185,7 @@ paths:
                   data: { $ref: "#/components/schemas/Person" }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/PasswordChangeRequired" }
         "404": { $ref: "#/components/responses/DocumentNotFound" }
         "502": { $ref: "#/components/responses/LookupUnavailable" }
 
@@ -194,6 +207,7 @@ paths:
                   data: { $ref: "#/components/schemas/Company" }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/PasswordChangeRequired" }
         "404": { $ref: "#/components/responses/DocumentNotFound" }
         "502": { $ref: "#/components/responses/LookupUnavailable" }
 
@@ -214,7 +228,9 @@ components:
         user: { $ref: "#/components/schemas/User" }
     User:
       type: object
+      required: [must_change_password]
       properties:
+        must_change_password: { type: boolean }
         id: { type: string, format: uuid }
         document_type: { type: string, enum: [dni] }
         document_number: { type: string, example: "10000002" }
@@ -274,6 +290,11 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     ValidationFailed:
       description: "`VALIDATION_FAILED`. `details` is `[{ field, code }]`."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    PasswordChangeRequired:
+      description: "`PASSWORD_CHANGE_REQUIRED`: set a new password before accessing the application."
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

@@ -41,7 +41,7 @@ branchSharing, ok)`), with a test, so API-03 only consumes it.
    those numbers elsewhere.
 4. **Concurrent hashing limit**: argon2id takes ~19 MiB per hash and the container has 256 MB. Add a
    semaphore (4 at a time) around `Hasher.Hash/Verify` so a burst of logins cannot exhaust memory.
-5. **Migration `00003`**: `branches.organization_id` with composite FKs, `user_branches.organization_id`, and
+5. **Tenancy migration (after password-onboarding migration `00003`)**: `branches.organization_id` with composite FKs, `user_branches.organization_id`, and
    `plan_agreements` (see data-model.md). Production tables are empty, so backfill is trivial; still write the
    `UPDATE` for safety.
 
@@ -83,13 +83,13 @@ the client name, gym names and RUC (case-insensitive, contains).
 ```json
 { "id": "optional-uuid",
   "owner": { "document_number": "45678912", "first_names": "MARIA ELENA", "last_names": "ROJAS CAMPOS",
-             "email": "maria@example.com", "phone": "999111222", "password": "at-least-8" },
+             "email": "maria@example.com", "phone": "999111222" },
   "gyms": [ { "name": "Fuerza Uno", "tax_id": "20123456789",
               "branches": [ { "name": "Centro", "address": "Av. Uno 123" } ] } ],
   "agreed_extra": false }
 ```
 Rules: the organization **name is `first_names + " " + last_names`** (normalized spaces); owner DNI valid and unused;
-names, email (basic format) and phone (9 digits starting with 9) required; password 8+; at least one gym and each gym
+names, email (basic format) and phone (9 digits starting with 9) required; temporary password derived from the owner DNI; at least one gym and each gym
 at least one branch; gym and branch names required; `tax_id` optional, 11 digits when present (it may repeat between
 gyms). If the request goes beyond the free plan and `agreed_extra` is not `true` → `409 PLAN_LIMIT_EXCEEDED` with
 `details: { "extra_gyms": n, "extra_branches": n }`; with `true`, create it and insert one `plan_agreements` row per
@@ -110,7 +110,7 @@ it idempotent.
 catalog. A gym of another organization → 404; of the same organization but not manageable by the caller → 403; a
 superadmin → 403.
 
-### Team (owner and admin; reception and superadmin get 403)
+### Team (owner and admin; superadmin may inspect reads, reception gets 403)
 
 `GET /users`:
 ```json
@@ -121,10 +121,10 @@ superadmin → 403.
 Visibility: owner sees every user of its organization; admin sees itself and the receptionists of its gym (every
 branch of the receptionist must belong to the admin's gym). Nobody sees the superadmin.
 
-`POST /users`: `{ "id?", "full_name", "document_number", "role": "admin|receptionist", "gym_id" (admin), "branch_ids" (receptionist), "password" }`.
-`PATCH /users/{id}`: `{ full_name?, role?, gym_id?, branch_ids? }` (the DNI never changes, see Q-DNI-EDIT).
-`POST /users/{id}/deactivate`, `POST /users/{id}/activate`, `POST /users/{id}/password` with `{ "new_password" }`
-(a manager sets a new one; it bumps `password_version`, so the user is signed out everywhere).
+`POST /users`: `{ "id?", "full_name", "document_number", "role": "admin|receptionist", "gym_id" (admin), "branch_ids" (receptionist) }`.
+`PATCH /users/{id}`: `{ full_name?, document_number?, role?, gym_id?, branch_ids? }` (DNI corrections by authorized superiors only; see business-rules §2).
+`POST /users/{id}/deactivate`, `POST /users/{id}/activate`, `POST /users/{id}/password` without a caller-selected password
+(a manager resets it to the DNI; it bumps `password_version` and requires a password change).
 
 Rules: only an owner may create or change an `admin`; an admin only creates/edits receptionists whose branches are all in
 its gym; a receptionist needs 1+ branches; branches and gym must belong to the caller's organization (a foreign id is a
@@ -138,7 +138,7 @@ reach; the DNI is unique system-wide.
 | `PLAN_LIMIT_EXCEEDED` | 409 | beyond the free plan without `agreed_extra` (details with the extras) |
 | `USER_DOCUMENT_TAKEN` | 409 | the DNI already belongs to a user |
 | `ROLE_NOT_ASSIGNABLE` | 403 | an admin trying to create/edit an admin or owner |
-| `SCOPE_NOT_ALLOWED` | 403 | gym or branches outside what the caller controls |
+| `SCOPE_NOT_ALLOWED` | 400 / 403 | foreign-organization body reference / inaccessible same-organization scope |
 | `CANNOT_MODIFY_SELF` | 403 | editing, deactivating or resetting yourself here |
 | `CANNOT_MODIFY_OWNER` | 403 | touching an owner as owner/admin |
 | `BRANCHES_REQUIRED` | 400 | receptionist without branches (a `VALIDATION_FAILED` field is also fine) |
@@ -198,3 +198,22 @@ owner reviewed the summary.
 - Gaps: the team endpoint section forbids superadmin reads, while the required inspection test and business-rules §2 allow them. The team rules describe foreign body references as 400 `SCOPE_NOT_ALLOWED`, but the error table assigns that code 403. Resolve these contradictions before implementing the contract.
 - Questions for the owner: approve the Q-PASSWORD, Q-LOGO and Q-DNI-EDIT defaults; confirm superadmin inspection of `GET /users`; confirm 400 for foreign-organization body references, 404 for foreign path resources, and 403 for inaccessible same-organization scope.
 - Status: API-02 is pending these decisions. Later plans have not started. WEB-01's instruction to retain E2E data conflicts with the owner's explicit cleanup requirement; implementation must use isolated fixtures and remove them after tests.
+
+## Owner decisions — 2026-10-27
+
+- Password onboarding and manager resets follow business-rules §15, replacing Q-PASSWORD's default.
+- Superadmin inspection includes team reads. Foreign body references use 400, foreign path resources
+  use 404, and unauthorized same-organization scope uses 403.
+- Logo uploads are deferred; future image storage is Cloudflare R2. No credentials needed now.
+- Authorized superiors may correct user DNI under business-rules §2; self-correction stays forbidden.
+- Add platform owner management endpoints for DNI correction and password reset, since the team
+  endpoints cannot manage owners. Document and test them in OpenAPI with superadmin-only access.
+- Implementation is in progress; no plan is complete yet.
+
+### Password onboarding implementation
+
+Implemented live mandatory-change state, restricted authenticated routes, forced return to login,
+and conditional password updates. Added migration `00003` and a real PostgreSQL integration test
+covering reset-state login, blocked routes, validation, token invalidation and login with the new
+password. Full API tests passed with `-race -count=1`; fixture counts returned to zero. Client and
+team creation/reset endpoints are still pending, so API-02 remains incomplete.

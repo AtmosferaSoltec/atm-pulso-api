@@ -24,7 +24,7 @@ type UserRepository interface {
 	ScopeOf(ctx context.Context, user domain.User) (Scope, error)
 	UpdateProfile(ctx context.Context, id uuid.UUID, fullName, phone string, at time.Time) (domain.User, error)
 	// UpdatePassword stores the new hash, bumps the password version and returns it.
-	UpdatePassword(ctx context.Context, id uuid.UUID, passwordHash string, at time.Time) (int, error)
+	UpdatePassword(ctx context.Context, id uuid.UUID, expectedVersion int, passwordHash string, at time.Time) (int, error)
 }
 
 // PasswordHasher hashes and verifies passwords.

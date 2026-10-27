@@ -6,6 +6,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"net/http"
 	"slices"
 	"strings"
 
@@ -40,7 +41,8 @@ type Principal struct {
 	// GymID is the gym an admin manages; uuid.Nil for the other roles.
 	GymID uuid.UUID
 	// BranchIDs are the branches a receptionist works in; empty for the other roles.
-	BranchIDs []uuid.UUID
+	BranchIDs          []uuid.UUID
+	MustChangePassword bool
 }
 
 // BranchRef identifies a branch and the gym it belongs to.
@@ -124,6 +126,11 @@ func Require(authenticator Authenticator) gin.HandlerFunc {
 		}
 		if err != nil {
 			apierror.Respond(c, err)
+			return
+		}
+		canChangePassword := (c.Request.Method == http.MethodGet && c.FullPath() == "/api/v1/me") || (c.Request.Method == http.MethodPost && c.FullPath() == "/api/v1/me/password")
+		if principal.MustChangePassword && !canChangePassword {
+			apierror.Respond(c, apierror.New(http.StatusForbidden, "PASSWORD_CHANGE_REQUIRED", "Debes crear una nueva contraseña para continuar."))
 			return
 		}
 		c.Request = c.Request.WithContext(WithPrincipal(c.Request.Context(), principal))

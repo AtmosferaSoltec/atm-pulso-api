@@ -50,8 +50,9 @@ type Profile struct {
 
 // Session is the result of signing in or changing the password.
 type Session struct {
-	Token   Token
-	Profile Profile
+	Token         Token
+	Profile       Profile
+	LoginRequired bool
 }
 
 func loginKey(documentNumber string) string { return "login:" + documentNumber }
@@ -132,10 +133,11 @@ func (s *Service) Authenticate(ctx context.Context, accessToken string) (auth.Pr
 	}
 
 	principal := auth.Principal{
-		UserID:         user.ID,
-		OrganizationID: user.OrganizationID,
-		Role:           auth.Role(user.Role),
-		GymID:          user.GymID,
+		UserID:             user.ID,
+		OrganizationID:     user.OrganizationID,
+		Role:               auth.Role(user.Role),
+		GymID:              user.GymID,
+		MustChangePassword: user.MustChangePassword,
 	}
 	if user.Role == domain.RoleReceptionist {
 		principal.BranchIDs, err = s.Users.BranchIDs(ctx, user.ID)
@@ -170,7 +172,7 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, fullName,
 }
 
 // ChangePassword replaces the password after checking the current one. It signs out
-// every older token and returns a fresh one, so the user stays signed in here.
+// every older token. Required changes demand a new login; voluntary changes issue a fresh token.
 func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, current, next string) (Session, error) {
 	now := s.Clock.Now()
 	key := passwordKey(userID)
@@ -199,9 +201,12 @@ func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, current,
 	if err != nil {
 		return Session{}, fmt.Errorf("hash password: %w", err)
 	}
-	version, err := s.Users.UpdatePassword(ctx, userID, hash, now)
+	version, err := s.Users.UpdatePassword(ctx, userID, creds.PasswordVersion, hash, now)
 	if err != nil {
 		return Session{}, fmt.Errorf("update password: %w", err)
+	}
+	if creds.MustChangePassword {
+		return Session{LoginRequired: true}, nil
 	}
 	creds.PasswordVersion = version
 	return s.session(ctx, creds.User, now)

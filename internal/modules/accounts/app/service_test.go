@@ -113,11 +113,15 @@ func (f *fakeUsers) UpdateProfile(_ context.Context, id uuid.UUID, name, phone s
 	return u.User, nil
 }
 
-func (f *fakeUsers) UpdatePassword(_ context.Context, id uuid.UUID, hash string, _ time.Time) (int, error) {
+func (f *fakeUsers) UpdatePassword(_ context.Context, id uuid.UUID, expectedVersion int, hash string, _ time.Time) (int, error) {
 	u, ok := f.byID[id]
 	if !ok {
 		return 0, domain.ErrUserNotFound
 	}
+	if u.PasswordVersion != expectedVersion || !u.IsActive {
+		return 0, domain.ErrUserNotFound
+	}
+	u.MustChangePassword = false
 	u.PasswordHash = hash
 	u.PasswordVersion++
 	f.byID[id] = u
