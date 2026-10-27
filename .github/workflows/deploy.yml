@@ -37,13 +37,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Project rule: develop -> main -> production. A commit that did not go
+      # Project rule: main -> production. A commit that did not go
       # through main is not deployed.
       - name: Ensure the commit is already in main
         run: |
           git fetch origin main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::El commit $GITHUB_SHA no esta en main. Flujo obligatorio: develop -> main -> production."
+            echo "::error::El commit $GITHUB_SHA no esta en main. Flujo obligatorio: main -> production."
             exit 1
           fi
 

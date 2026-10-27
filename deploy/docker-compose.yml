@@ -31,8 +31,7 @@ services:
     environment:
       APP_ENV: production
       PORT: "3001"
-    # Loopback only. The web reaches it through its own nginx (`/api` is proxied to
-    # `pulso-api:3001` on the shared network), so it needs no public name.
+    # Loopback only: the host's nginx publishes it as pulso-api.atmosferast.com.
     ports:
       - "127.0.0.1:3081:3001"
     networks:

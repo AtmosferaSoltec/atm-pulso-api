@@ -31,6 +31,6 @@ the user's own profile, and the document lookups through `atm-identity-api`.
 - [x] The production image starts, migrates, passes its healthcheck and refuses `seed-dev` and an incomplete `.env`.
 
 ## Pending on the server (the owner)
-See "Deploying" in the README: provision the database, create `/opt/pulso-api` and its `.env`,
-create the identity API key for Pulso, create the superadmin, and (when plan 06 starts) add the
-`/api` proxy to the web's nginx.
+Everything the server needs was prepared (see "Deploying" in the README): the database and its
+role, `/opt/pulso-api/.env`, Pulso's key in `atm-identity-api` and the `pulso-api.atmosferast.com`
+nginx site. What is left is creating the superadmin after the first deploy.

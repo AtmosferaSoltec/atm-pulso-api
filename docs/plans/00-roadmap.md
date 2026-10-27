@@ -71,7 +71,8 @@ Server-side pagination and aggregation.
 
 Replace the demo store of `atm-pulso-web` with this API, behind the web's existing `services`
 layer: login (token kept in memory only), the profile dialog, document lookups, then each
-feature as its plan lands. The web's nginx proxies `/api` to `pulso-api:3001` (same origin).
+feature as its plan lands. The web calls `https://pulso-api.atmosferast.com/api/v1` directly
+(CORS already allows `https://pulso.atmosferast.com`).
 Keep the demo data as `seed-dev` for staging.
 
 ## Decisions already taken

@@ -161,15 +161,20 @@ parameter. The database backs this up with composite foreign keys and `CHECK` co
 
 ## 9. Branches and deployment
 
-Exactly three branches: `develop` (all work happens here), `main` (what is functional) and
-`production` (what is deployed). Flow `develop` → `main` → `production`. Never push directly to
-`main` or `production`, and never promote `develop` straight to `production`. Promoting is the
-owner's decision.
+Exactly two branches: `main` (all work happens here; it is what is functional) and
+`production` (what is deployed). **A push to `production` triggers the deploy workflow.**
+`production` only ever receives commits that are already in `main` (the workflow refuses
+anything else), so the flow is always `main` → `production`, and promoting is the owner's decision.
 
 The workflow on `production` has three jobs: **check** (format, vet, lint, tests with a real
 PostgreSQL, build; also verifies the commit is already in `main`), **build** (the image is built
 on GitHub and published to GHCR, never on the VPS) and **deploy** (the VPS pulls it). The server
 needs `/opt/pulso-api` and its `.env` (see README).
+
+Domains: the web is `pulso.atmosferast.com` and the API is `pulso-api.atmosferast.com`, both
+behind the host's nginx with the wildcard origin certificate. The browser calls the API across
+origins, so `CORS_ORIGIN` must list the web's origin (`https://pulso.atmosferast.com`); the token
+is sent in the `Authorization` header, never in a cookie.
 
 ## 10. Working agreements
 

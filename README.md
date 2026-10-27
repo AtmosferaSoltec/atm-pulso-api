@@ -68,34 +68,46 @@ export TEST_DATABASE_URL='postgres://postgres:test@127.0.0.1:55432/pulso_test?ss
 
 Also: `gofmt -l .`, `go vet ./...` and `golangci-lint run` (the CI runs all of them).
 
-## Deploying
+## Domains and branches
 
-Pushing to `production` (after `develop` → `main`) runs `.github/workflows/deploy.yml`: check →
-build image on GitHub (GHCR) → the VPS pulls it. It uses the same repository secrets as the
+| What | Where |
+|---|---|
+| Web | https://pulso.atmosferast.com |
+| API | https://pulso-api.atmosferast.com (`/api/v1`) |
+
+Two branches only: `main` (where the work happens) and `production`. **Pushing to `production`
+runs `.github/workflows/deploy.yml`**, which refuses a commit that is not already in `main`:
+check (format, vet, lint, tests with a real PostgreSQL) → build the image on GitHub (GHCR) → the
+VPS pulls it, applies the migrations and restarts. It uses the same repository secrets as the
 other projects (`SSH_HOST`, `SSH_USER`, `SSH_KEY`).
 
-**One-time setup on the VPS**, before the first deploy:
+## Deploying
 
-1. Create the database (as the PostgreSQL superuser):
+**The server is already prepared** (database, folder, `.env`, identity key and nginx). For the record,
+this is what exists there and how to rebuild it if it is ever lost:
+
+1. Database, schema and role `pulso_app`, from `scripts/provision-db.sql` (as the PostgreSQL superuser):
    ```sh
    docker exec -i atm-postgres psql -v ON_ERROR_STOP=1 -U postgres \
      -v app_password="'<PULSO_DB_PASSWORD>'" -d postgres < scripts/provision-db.sql
    ```
-2. Create the folder: `mkdir -p /opt/pulso-api && chown deploy:deploy /opt/pulso-api`.
-3. Create `/opt/pulso-api/.env` from `.env.example` with production values:
-   `APP_ENV=production`, `DATABASE_URL=postgres://pulso_app:…@atm-postgres:5432/pulso?sslmode=disable&search_path=pulso`,
-   a new `JWT_ACCESS_SECRET`, `CORS_ORIGIN` empty, `IDENTITY_API_URL=http://identity-api:8080` and the key from step 4.
-4. Give Pulso its own key in `atm-identity-api` (printed once):
-   `docker exec identity-api /app/identity-api create-client-system pulso "Pulso"`
-   (use the binary path and command your identity deploy documents).
-5. Create the superadmin (there is no registration). The password is read from an
-   environment variable, never from the command line, so it stays out of the shell history:
-   ```sh
-   cd /opt/pulso-api && docker compose run --rm -e SUPERADMIN_PASSWORD='<a long password>' \
-     app create-superadmin <dni> "<full name>"
-   ```
-   (Locally: `SUPERADMIN_PASSWORD=... scripts/dev.sh create-superadmin <dni> "<full name>"`.)
+2. `/opt/pulso-api` owned by `deploy`, with `/opt/pulso-api/.env` (mode 600, never in git) holding the
+   variables of `.env.example` with production values: `APP_ENV=production`, the database URL
+   (`...@atm-postgres:5432/pulso?sslmode=disable&search_path=pulso`), a long `JWT_ACCESS_SECRET`,
+   `CORS_ORIGIN=https://pulso.atmosferast.com`, `IDENTITY_API_URL=http://identity-api:8080` and the key.
+3. Pulso's own key in `atm-identity-api` (printed once):
+   `docker exec identity-api /app/identity-api create-client-system pulso "Pulso"`.
+4. The nginx site `pulso-api.atmosferast.com` → `127.0.0.1:3081` (the wildcard origin certificate).
 
-The container is `pulso-api`, on the shared `atm-network`, published only on `127.0.0.1:3081`.
-`pulso-web`'s nginx will proxy `/api/` to `http://pulso-api:3001` (same origin: no CORS, and the
-token is never stored in a cookie).
+**After the first deploy**, create the superadmin (there is no registration). The password is read from an
+environment variable, never from the command line, so it stays out of the shell history:
+
+```sh
+cd /opt/pulso-api && docker compose run --rm -e SUPERADMIN_PASSWORD='<a long password>' \
+  app create-superadmin <dni> "<full name>"
+```
+
+(Locally: `SUPERADMIN_PASSWORD=... scripts/dev.sh create-superadmin <dni> "<full name>"`.)
+
+The container is `pulso-api`, on the shared `atm-network`, published only on `127.0.0.1:3081`. The web
+calls the API across origins; the token travels in the `Authorization` header, never in a cookie.
