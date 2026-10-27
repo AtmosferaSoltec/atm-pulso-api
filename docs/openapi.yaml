@@ -1,0 +1,306 @@
+openapi: 3.1.0
+info:
+  title: Pulso API
+  version: 0.1.0
+  description: |
+    Backend of Pulso, Atmósfera's gym administration product.
+
+    - Everything lives under `/api/v1`. JSON, `snake_case`.
+    - Success: `{ "data": ... }`. Error: `{ "error": { "code", "message", "details" } }`.
+    - `code` is stable and in English; `message` is Spanish and only a readable fallback.
+    - Authentication is a stateless **access token** in `Authorization: Bearer <token>`.
+      There is no refresh token and no session: the web keeps the token in memory only.
+servers:
+  - url: http://localhost:3001/api/v1
+    description: local development
+tags:
+  - name: health
+  - name: auth
+  - name: profile
+  - name: documents
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness. The process answers.
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      status: { type: string, example: ok }
+  /health/ready:
+    get:
+      tags: [health]
+      summary: Readiness. The database answers too.
+      responses:
+        "200": { description: ok }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Sign in with DNI and password.
+      description: |
+        Nothing is stored: no session row and no refresh token. An unknown DNI, a wrong
+        password and an inactive user all answer `INVALID_CREDENTIALS`, so the caller cannot
+        tell which one it was. After 5 failures in 15 minutes a DNI answers
+        `TOO_MANY_ATTEMPTS` with `Retry-After`. There is also a stricter per-IP limit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [document_number, password]
+              properties:
+                document_number: { type: string, pattern: "^[0-9]{8}$", example: "10000002" }
+                password: { type: string, example: "Pulso2026!" }
+      responses:
+        "200":
+          description: signed in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Session" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/InvalidCredentials" }
+        "429": { $ref: "#/components/responses/TooManyAttempts" }
+
+  /me:
+    get:
+      tags: [profile]
+      summary: The signed-in user and where they work.
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: the user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [profile]
+      summary: Edit your own non-sensitive data (name and phone).
+      description: The DNI, role and scope cannot be edited here.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [full_name]
+              properties:
+                full_name: { type: string, minLength: 3, maxLength: 120 }
+                phone:
+                  type: string
+                  pattern: "^9[0-9]{8}$"
+                  description: Optional. An empty string clears it.
+      responses:
+        "200":
+          description: the updated user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /me/password:
+    post:
+      tags: [profile]
+      summary: Change your own password.
+      description: |
+        Every older token stops working at once and a fresh one is returned, so the user
+        stays signed in on this device. A wrong current password answers
+        `CURRENT_PASSWORD_INCORRECT` with **400** (not 401, so the web does not read it as an
+        ended session) and repeated failures are limited.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string }
+                new_password: { type: string, minLength: 8, maxLength: 128 }
+      responses:
+        "200":
+          description: password changed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Session" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyAttempts" }
+
+  /documents/persons/{document_number}:
+    get:
+      tags: [documents]
+      summary: Names of a DNI, resolved by atm-identity-api.
+      description: Any signed-in user. Carné de extranjería is not resolved; enter it manually.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: document_number, in: path, required: true, schema: { type: string, pattern: "^[0-9]{8}$" } }
+      responses:
+        "200":
+          description: the person
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Person" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/DocumentNotFound" }
+        "502": { $ref: "#/components/responses/LookupUnavailable" }
+
+  /documents/companies/{document_number}:
+    get:
+      tags: [documents]
+      summary: Legal name and address of a RUC, resolved by atm-identity-api.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: document_number, in: path, required: true, schema: { type: string, pattern: "^[0-9]{11}$" } }
+      responses:
+        "200":
+          description: the company
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Company" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/DocumentNotFound" }
+        "502": { $ref: "#/components/responses/LookupUnavailable" }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Session:
+      type: object
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, example: Bearer }
+        expires_at: { type: string, format: date-time }
+        expires_in: { type: integer, description: Seconds until it stops working, example: 28800 }
+        user: { $ref: "#/components/schemas/User" }
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        document_type: { type: string, enum: [dni] }
+        document_number: { type: string, example: "10000002" }
+        full_name: { type: string }
+        phone: { type: [string, "null"] }
+        role: { type: string, enum: [superadmin, owner, admin, receptionist] }
+        organization:
+          description: The client. Null for the superadmin.
+          oneOf: [{ $ref: "#/components/schemas/Named" }, { type: "null" }]
+        gym:
+          description: The gym an admin manages. Null for the other roles.
+          oneOf: [{ $ref: "#/components/schemas/Named" }, { type: "null" }]
+        branches:
+          type: array
+          description: Only a receptionist has assigned branches.
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              gym_id: { type: string, format: uuid }
+              gym_name: { type: string }
+    Named:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    Person:
+      type: object
+      properties:
+        document_number: { type: string }
+        first_names: { type: string }
+        paternal_surname: { type: string }
+        maternal_surname: { type: string }
+        full_name: { type: string }
+    Company:
+      type: object
+      properties:
+        document_number: { type: string }
+        legal_name: { type: string }
+        trade_name: { type: [string, "null"] }
+        address: { type: [string, "null"] }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: {}
+  responses:
+    Error:
+      description: error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ValidationFailed:
+      description: "`VALIDATION_FAILED`. `details` is `[{ field, code }]`."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: "`UNAUTHORIZED`: missing, invalid or expired token, inactive user, or a token from before a password change."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InvalidCredentials:
+      description: "`INVALID_CREDENTIALS`."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooManyAttempts:
+      description: "`TOO_MANY_ATTEMPTS`. `Retry-After` says how many seconds to wait."
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    DocumentNotFound:
+      description: "`DOCUMENT_NOT_FOUND`."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    LookupUnavailable:
+      description: "`LOOKUP_UNAVAILABLE`: the lookup service failed; the web falls back to manual entry."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
