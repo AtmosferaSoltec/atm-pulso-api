@@ -22,6 +22,7 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/config"
@@ -114,6 +115,8 @@ func run() int {
 	scope := auth.OrganizationScope(accountsModule.Organizations())
 	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
+	// The CSV download is heavy: it shares the login's tighter per-IP limit.
+	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope, middleware.NewRateLimiter(cfg.LoginRateLimitPerMinute).Middleware())
 
 	if err := httpserver.Serve(ctx, router, cfg.Port, log); err != nil {
 		log.Error("server", "error", err)

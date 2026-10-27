@@ -26,6 +26,7 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/adapters/security"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/httpserver"
@@ -62,6 +63,7 @@ func newHarness(t *testing.T) harness {
 	scope := auth.OrganizationScope(accountsModule.Organizations())
 	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
+	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope, middleware.NewRateLimiter(100_000).Middleware())
 	return harness{router: router, pool: pool}
 }
 
@@ -103,6 +105,18 @@ func (h harness) call(t *testing.T, method, path, token string, body any) respon
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out.body), rec.Body.String())
 	}
 	return out
+}
+
+// callRaw returns the recorder for endpoints that do not answer JSON (the CSV download).
+func (h harness) callRaw(t *testing.T, method, path, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, httpserver.APIPrefix+path, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	h.router.ServeHTTP(rec, req)
+	return rec
 }
 
 func (h harness) login(t *testing.T, document, password string) response {

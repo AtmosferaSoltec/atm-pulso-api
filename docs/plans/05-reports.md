@@ -67,3 +67,12 @@ Error codes: `VALIDATION_FAILED` (bad range, `from > to`, range over 366 days), 
 ## Done when
 
 docs/README.md's definition of done; WEB-05 can be built from `openapi.yaml`.
+
+## Completion — 2026-10-27
+
+- Implemented module `reports` (read-only, no tables): `GET /payments` with filters (`from`, `to`, `branch_id`, `gym_id`, `method`, `kind`, `q`) and `meta.totals` of the whole filter,
+  `GET /payments/export` (CSV: BOM, comma, formula prefix, 10,000-row limit, throttled like login), `GET /dashboard`. All in `openapi.yaml`. `apierror.Meta` gained `counts` and `totals`.
+- Decisions where documents disagreed (business-rules wins): `expiring_soon` has five members (not ten); reception gets the list **without** totals and gets 403 on the export and the dashboard;
+  `by_method` always lists the four methods with `"0.00"`.
+- Verified: money is summed in SQL (`numeric(14,2)`, found and fixed `"0"` vs `"0.00"`); Lima day boundary unit test; export size limit unit test; role matrix and tenant isolation; dashboard zeros for an empty organization.
+- Gaps: no `EXPLAIN` review with generated volume yet (API-06).
