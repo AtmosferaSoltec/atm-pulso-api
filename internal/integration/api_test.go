@@ -29,6 +29,7 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/health"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/httpserver"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/ids"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/middleware"
@@ -53,6 +54,8 @@ func newHarness(t *testing.T) harness {
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	router, api, err := httpserver.NewRouter(httpserver.Options{Logger: quiet, RateLimitPerMinute: 100_000})
 	require.NoError(t, err)
+
+	health.Register(api, pool)
 
 	accountsModule, err := accounts.New(accounts.Deps{Pool: pool, Clock: clock.System{}, JWTSecret: jwtSecret, AccessTokenTTL: 8 * time.Hour})
 	require.NoError(t, err)

@@ -104,6 +104,19 @@ func CORS(allowed []string) gin.HandlerFunc {
 	}
 }
 
+// SecurityHeaders sets the headers of a JSON API: no sniffing, no framing, no referrer,
+// and nothing cached (responses carry personal data and depend on the bearer token).
+func SecurityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		h := c.Writer.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Cache-Control", "no-store")
+		c.Next()
+	}
+}
+
 // BodyLimit cuts bodies larger than limit; when reading them the handler gets a
 // *http.MaxBytesError that apierror turns into a 413.
 func BodyLimit(limit int64) gin.HandlerFunc {

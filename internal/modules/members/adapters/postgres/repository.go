@@ -26,37 +26,47 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 
 func formatDate(t time.Time) string { return t.Format("2006-01-02") }
 
-// memberBase computes the status in SQL so filtering and paging happen in the database.
+// statusBase computes only the status in SQL (a cheap aggregate per member), so filtering, counting
+// and paging happen before the heavier per-row details are looked up.
 // $1 organization, $2 today (Lima), $3 search text, $4 home branch (or NULL), $5 member id (or NULL).
-const memberBase = `
+const statusBase = `
 WITH base AS (
-  SELECT m.id, m.document_type, m.document_number, m.full_name, m.phone, m.created_at,
-         b.id AS branch_id, b.name AS branch_name, COALESCE(g.display_name, g.name) AS gym_name,
+  SELECT m.id, m.document_type, m.document_number, m.full_name, m.phone, m.created_at, m.home_branch_id,
          CASE WHEN COALESCE(s.active_now, false) THEN
                 CASE WHEN s.latest_end - $2::date <= 7 THEN 'expiring' ELSE 'active' END
               WHEN COALESCE(s.scheduled, false) THEN 'scheduled'
               ELSE 'expired' END AS status,
-         COALESCE(s.latest_end - $2::date, 0) AS days_remaining,
-         COALESCE(cur.months, 0) AS months, cur.starts_on, cur.ends_on, lr.number AS last_receipt
+         COALESCE(s.latest_end - $2::date, 0) AS days_remaining
   FROM members m
-  JOIN branches b ON b.id = m.home_branch_id AND b.organization_id = m.organization_id
-  JOIN gyms g ON g.id = b.gym_id AND g.organization_id = b.organization_id
   LEFT JOIN LATERAL (
     SELECT max(ends_on) AS latest_end,
            bool_or(starts_on <= $2::date AND ends_on >= $2::date) AS active_now,
            bool_or(starts_on > $2::date) AS scheduled
     FROM memberships WHERE member_id = m.id) s ON true
-  LEFT JOIN LATERAL (
-    SELECT months, starts_on, ends_on FROM memberships WHERE member_id = m.id
-    ORDER BY (starts_on <= $2::date AND ends_on >= $2::date) DESC, ends_on DESC LIMIT 1) cur ON true
-  LEFT JOIN LATERAL (
-    SELECT r.number FROM payments p JOIN receipts r ON r.id = p.receipt_id
-    WHERE p.member_id = m.id ORDER BY p.created_at DESC, r.number DESC LIMIT 1) lr ON true
   WHERE m.organization_id = $1
     AND ($3::text = '' OR m.full_name ILIKE '%' || $3 || '%' OR m.document_number LIKE '%' || $3 || '%')
     AND ($4::uuid IS NULL OR m.home_branch_id = $4)
     AND ($5::uuid IS NULL OR m.id = $5)
 )`
+
+// pageQuery selects one page of base and then looks up branch, current period and last receipt
+// for those rows only. $6 status filter (” = any), $7 limit, $8 offset.
+const pageQuery = statusBase + `, page AS (
+  SELECT * FROM base WHERE ($6::text = '' OR status = $6) ORDER BY created_at DESC, id DESC LIMIT $7 OFFSET $8
+)
+SELECT pg.id, pg.document_type, pg.document_number, pg.full_name, pg.phone, pg.created_at,
+       b.id, b.name, COALESCE(g.display_name, g.name), pg.status, pg.days_remaining,
+       COALESCE(cur.months, 0), cur.starts_on, cur.ends_on, lr.number
+FROM page pg
+JOIN branches b ON b.id = pg.home_branch_id AND b.organization_id = $1
+JOIN gyms g ON g.id = b.gym_id AND g.organization_id = b.organization_id
+LEFT JOIN LATERAL (
+  SELECT months, starts_on, ends_on FROM memberships WHERE member_id = pg.id
+  ORDER BY (starts_on <= $2::date AND ends_on >= $2::date) DESC, ends_on DESC LIMIT 1) cur ON true
+LEFT JOIN LATERAL (
+  SELECT r.number FROM payments p JOIN receipts r ON r.id = p.receipt_id
+  WHERE p.member_id = pg.id ORDER BY p.created_at DESC, r.number DESC LIMIT 1) lr ON true
+ORDER BY pg.created_at DESC, pg.id DESC`
 
 var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
@@ -85,14 +95,11 @@ func scanMember(row pgx.Row) (app.MemberView, error) {
 	return v, nil
 }
 
-const memberColumns = `SELECT id, document_type, document_number, full_name, phone, created_at, branch_id, branch_name, gym_name,
-	status, days_remaining, months, starts_on, ends_on, last_receipt FROM base`
-
 // List returns a page of the shared directory and the counts per status.
 func (r *Repository) List(ctx context.Context, organizationID uuid.UUID, f app.Filter, today time.Time) (app.ListResult, error) {
 	query := likeEscaper.Replace(strings.TrimSpace(f.Query))
 	var out app.ListResult
-	err := r.pool.QueryRow(ctx, memberBase+`
+	err := r.pool.QueryRow(ctx, statusBase+`
 		SELECT count(*), count(*) FILTER (WHERE status='active'), count(*) FILTER (WHERE status='expiring'),
 		       count(*) FILTER (WHERE status='expired'), count(*) FILTER (WHERE status='scheduled') FROM base`,
 		organizationID, today, query, f.HomeBranchID, nil).
@@ -112,9 +119,7 @@ func (r *Repository) List(ctx context.Context, organizationID uuid.UUID, f app.F
 	case "scheduled":
 		out.Total = out.Counts.Scheduled
 	}
-	rows, err := r.pool.Query(ctx, memberBase+memberColumns+` WHERE ($6::text = '' OR status = $6)
-		ORDER BY created_at DESC, id DESC LIMIT $7 OFFSET $8`,
-		organizationID, today, query, f.HomeBranchID, nil, f.Status, f.PageSize, (f.Page-1)*f.PageSize)
+	rows, err := r.pool.Query(ctx, pageQuery, organizationID, today, query, f.HomeBranchID, nil, f.Status, f.PageSize, (f.Page-1)*f.PageSize)
 	if err != nil {
 		return out, err
 	}
@@ -132,7 +137,7 @@ func (r *Repository) List(ctx context.Context, organizationID uuid.UUID, f app.F
 
 // Member returns a member with all periods.
 func (r *Repository) Member(ctx context.Context, organizationID, memberID uuid.UUID, today time.Time) (app.MemberDetail, error) {
-	view, err := scanMember(r.pool.QueryRow(ctx, memberBase+memberColumns, organizationID, today, "", nil, memberID))
+	view, err := scanMember(r.pool.QueryRow(ctx, pageQuery, organizationID, today, "", nil, memberID, "", 1, 0))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.MemberDetail{}, domain.ErrMemberNotFound
 	}

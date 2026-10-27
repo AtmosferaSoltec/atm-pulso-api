@@ -51,6 +51,7 @@ func NewRouter(opts Options) (*gin.Engine, *gin.RouterGroup, error) {
 		middleware.RequestID(opts.Logger),
 		middleware.Recover(),
 		middleware.AccessLog(),
+		middleware.SecurityHeaders(),
 		middleware.CORS(opts.CORSOrigins),
 		middleware.BodyLimit(maxBodyBytes),
 		middleware.NewRateLimiter(opts.RateLimitPerMinute).Middleware(),

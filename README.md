@@ -7,17 +7,24 @@ client lives in `atm-pulso-web`. This project is independent: it is built the wa
 Rules and architecture: [AGENTS.md](AGENTS.md). Roadmap: [docs/plans/00-roadmap.md](docs/plans/00-roadmap.md).
 Contract: [docs/openapi.yaml](docs/openapi.yaml).
 
-## What works today (plan 01)
+## What works today (plans 01 to 06)
 
-| Endpoint | Who | What |
+The complete list, with bodies, responses and error codes, is [docs/openapi.yaml](docs/openapi.yaml);
+a test fails if the code and the contract differ. By area:
+
+| Area | Endpoints | Who |
 |---|---|---|
-| `GET /api/v1/health`, `/health/ready` | public | liveness and database check |
-| `POST /api/v1/auth/login` | public | DNI + password → access token (stateless, no sessions) |
-| `GET /api/v1/me` | signed in | the user and where they work |
-| `PATCH /api/v1/me` | signed in | edit own name and phone |
-| `POST /api/v1/me/password` | signed in | change own password; answers a fresh token |
-| `GET /api/v1/documents/persons/{dni}` | signed in | name of a DNI, through `atm-identity-api` |
-| `GET /api/v1/documents/companies/{ruc}` | signed in | legal name and address of a RUC |
+| Health | `GET /health`, `/health/ready` | public |
+| Session | `POST /auth/login`, `GET/PATCH /me`, `POST /me/password` | login public; the rest signed in |
+| Lookups | `GET /documents/persons/{dni}`, `/documents/companies/{ruc}` | signed in (through `atm-identity-api`) |
+| Directory | `GET /catalog` | every role (superadmin: inspection) |
+| Platform | `/clients`, `/clients/summary`, `/clients/{id}/gyms`, `/gyms/{id}/branches`, `/clients/{id}/owner` | superadmin |
+| Gym settings | `PATCH /gyms/{id}` | owner, admin of that gym |
+| Team | `/users` and `/users/{id}`, `/activate`, `/deactivate`, `/password` | owner, admin |
+| Members | `/members`, `/members/{id}`, `/members/{id}/renewals`, `/members/{id}/receipts`, `/receipts/{id}` | every role (writes: not the superadmin) |
+| Access | `POST /access/checks`, `GET /access/events`, `GET /access/summary` | every role |
+| Day passes | `/day-passes`, `/day-passes/{id}` | every role |
+| Reports | `GET /payments`, `/payments/export`, `/dashboard` | owner, admin (reception: the list without totals) |
 
 Carné de extranjería has no lookup (`atm-identity-api` only resolves DNI and RUC): the web keeps
 it manual.
@@ -36,7 +43,7 @@ cp .env.example .env        # fill DATABASE_URL (same password) and JWT_ACCESS_S
                             # (openssl rand -base64 48). Leave IDENTITY_API_KEY empty:
                             # lookups then answer invented data.
 
-# 3. Migrate, load the demo accounts, run
+# 3. Migrate, create your first user, run
 scripts/dev.sh migrate up
 go run ./scripts/first-superadmin     # prints the INSERT of your first user; run it in psql (see below)
 scripts/dev.sh                        # http://localhost:3001/api/v1/health
