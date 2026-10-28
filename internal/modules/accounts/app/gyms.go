@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -44,8 +43,8 @@ var pricePattern = regexp.MustCompile(`^[0-9]{1,7}\.[0-9]{2}$`)
 
 const maxMembershipMonths = 24
 
-// normalizePrices accepts one price per duration (1 to 24 whole months) and returns the list
-// ordered by duration. It reports false for a repeated or out-of-range duration or a bad amount.
+// normalizePrices accepts one price per duration (1 to 24 whole months) and returns the list in
+// the order given: it is the order the gym wants them offered when selling. It reports false for a repeated or out-of-range duration or a bad amount.
 func normalizePrices(prices []MembershipPrice) ([]MembershipPrice, bool) {
 	if len(prices) > maxMembershipMonths {
 		return nil, false
@@ -61,9 +60,7 @@ func normalizePrices(prices []MembershipPrice) ([]MembershipPrice, bool) {
 		}
 		seen[price.Months] = true
 	}
-	ordered := append([]MembershipPrice{}, prices...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Months < ordered[j].Months })
-	return ordered, true
+	return append([]MembershipPrice{}, prices...), true
 }
 
 func (s *Service) UpdateGym(ctx context.Context, p auth.Principal, id uuid.UUID, input GymChanges) (Gym, error) {

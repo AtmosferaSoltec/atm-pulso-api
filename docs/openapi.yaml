@@ -1206,7 +1206,7 @@ components:
         branch_sharing: { type: boolean }
         membership_prices:
           type: array
-          description: Base price per duration, ordered by months. Empty until the gym sets them.
+          description: Base price per duration, in the order the gym set (the order offered when selling). Empty until the gym sets them.
           items: { $ref: "#/components/schemas/MembershipPrice" }
         branches:
           type: array
@@ -1275,7 +1275,7 @@ components:
         branch_sharing: { type: boolean }
         membership_prices:
           type: array
-          description: Replaces the whole list. One price per duration, 1 to 24 months, at most 24 entries.
+          description: Replaces the whole list and keeps its order. One price per duration, 1 to 24 months, at most 24 entries.
           items: { $ref: "#/components/schemas/MembershipPrice" }
     MembershipPrice:
       type: object

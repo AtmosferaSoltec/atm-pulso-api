@@ -51,8 +51,9 @@ func TestGymMembershipPrices(t *testing.T) {
 		map[string]any{"months": 2, "amount": "180.00"}, map[string]any{"months": 1, "amount": "100.00"},
 	}})
 	require.Equal(t, 200, saved.status, saved.body)
+	// The order sent is the order kept.
 	assert.Equal(t, []any{
-		map[string]any{"months": float64(1), "amount": "100.00"}, map[string]any{"months": float64(2), "amount": "180.00"},
+		map[string]any{"months": float64(2), "amount": "180.00"}, map[string]any{"months": float64(1), "amount": "100.00"},
 	}, saved.data()["membership_prices"])
 	// Other fields leave the list alone; an empty list clears it.
 	other := h.call(t, http.MethodPatch, path, owner, map[string]any{"brand_color": "#abcdef"})
