@@ -84,6 +84,7 @@ func run() int {
 		Logger:             log,
 		CORSOrigins:        cfg.CORSOrigins,
 		RateLimitPerMinute: cfg.RateLimitPerMinute,
+		BodyLimits:         map[string]int64{"PUT " + httpserver.APIPrefix + "/gyms/:gym_id/logo": app.MaxLogoBytes + 1},
 	})
 	if err != nil {
 		log.Error("router", "error", err)

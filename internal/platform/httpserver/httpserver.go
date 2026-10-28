@@ -32,6 +32,8 @@ type Options struct {
 	Logger             *slog.Logger
 	CORSOrigins        []string
 	RateLimitPerMinute int
+	// BodyLimits gives a route its own body limit, keyed "METHOD /full/path/:param" (uploads).
+	BodyLimits map[string]int64
 }
 
 // NewRouter returns Gin with the common middlewares and the /api/v1 group, where
@@ -53,7 +55,7 @@ func NewRouter(opts Options) (*gin.Engine, *gin.RouterGroup, error) {
 		middleware.AccessLog(),
 		middleware.SecurityHeaders(),
 		middleware.CORS(opts.CORSOrigins),
-		middleware.BodyLimit(maxBodyBytes),
+		middleware.BodyLimit(maxBodyBytes, opts.BodyLimits),
 		middleware.NewRateLimiter(opts.RateLimitPerMinute).Middleware(),
 	)
 	router.NoRoute(func(c *gin.Context) { apierror.Respond(c, apierror.ErrNotFound) })

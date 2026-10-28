@@ -17,8 +17,8 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/ids"
 )
 
-// MaxLogoBytes is the largest logo accepted: a logo is a small image.
-const MaxLogoBytes = 512 << 10
+// MaxLogoBytes is the largest logo accepted.
+const MaxLogoBytes = 10 << 20
 
 // logoTypes are the accepted images, by their real content (never by the file name or the
 // declared type). SVG is left out on purpose: it can carry scripts.

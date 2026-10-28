@@ -94,18 +94,24 @@ func TestGymLogo(t *testing.T) {
 		"empty":    {},
 		"text":     []byte("<svg xmlns='http://www.w3.org/2000/svg'></svg>"),
 		"declared": []byte("GIF89a" + strings.Repeat("x", 64)),
-		"huge":     append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 600<<10)...),
 	} {
 		res := h.putLogo(t, super, gym, body)
 		assert.Equal(t, 400, res.status, name)
 	}
+	// Just over the limit: the logo's own size error. Far over it: the body is cut off.
+	assert.Equal(t, 400, h.putLogo(t, super, gym, append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, app.MaxLogoBytes-7)...)).status)
+	assert.Equal(t, 413, h.putLogo(t, super, gym, make([]byte, 12<<20)).status)
 	assert.Empty(t, h.logos.objects, "a rejected image is never stored")
+
+	// A big logo (a few MB, far above the API's general 1 MiB body limit) is fine.
+	big := h.putLogo(t, super, gym, append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 3<<20)...))
+	require.Equal(t, 200, big.status, big.body)
 
 	first := h.putLogo(t, super, gym, pngImage)
 	require.Equal(t, 200, first.status, first.body)
 	url, _ := first.data()["logo_url"].(string)
 	require.True(t, strings.HasPrefix(url, "/gyms/"+gym+"/logo?v="), url)
-	assert.Len(t, h.logos.objects, 1)
+	assert.Len(t, h.logos.objects, 1, "replacing the big logo deleted it")
 
 	// Anyone can load it (an <img> sends no token), straight from the API and cacheable for good.
 	served := h.callRaw(t, http.MethodGet, url, "")

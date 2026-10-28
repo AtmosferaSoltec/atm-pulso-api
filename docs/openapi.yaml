@@ -611,7 +611,7 @@ paths:
       tags: [accounts]
       summary: Set a gym's logo.
       description: |
-        Superadmin only. The body is the image itself (not JSON): PNG, JPEG or WebP, at most 512 KB. The type is
+        Superadmin only. The body is the image itself (not JSON): PNG, JPEG or WebP, at most 10 MB. The type is
         checked by the file's content, never by its name or the declared Content-Type. The previous logo is deleted.
         Answers 503 STORAGE_UNAVAILABLE when no object store is configured.
       security: [{ bearer: [] }]

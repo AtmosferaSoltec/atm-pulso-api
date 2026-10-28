@@ -24,6 +24,7 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/access"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/adapters/security"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/app"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports"
@@ -53,7 +54,7 @@ func newHarness(t *testing.T) harness {
 	pool := testsupport.MigratedPool(t)
 
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	router, api, err := httpserver.NewRouter(httpserver.Options{Logger: quiet, RateLimitPerMinute: 100_000})
+	router, api, err := httpserver.NewRouter(httpserver.Options{Logger: quiet, RateLimitPerMinute: 100_000, BodyLimits: map[string]int64{"PUT " + httpserver.APIPrefix + "/gyms/:gym_id/logo": app.MaxLogoBytes + 1}})
 	require.NoError(t, err)
 
 	health.Register(api, pool)

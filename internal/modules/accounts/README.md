@@ -49,7 +49,7 @@ and receptionist tenant isolation. Hash and verification operations share four c
 The identity of a gym (`display_name`, `brand_color`, logo) is set **only by the superadmin**, who may
 change nothing else of the gym; owners and admins change prices and branch sharing but get `403` if
 they send an identity field. The logo is one per gym (repeat the upload for each gym that shares it).
-`PUT /gyms/{id}/logo` takes the raw image (PNG, JPEG or WebP, up to 512 KB, checked by content; SVG is
+`PUT /gyms/{id}/logo` takes the raw image (PNG, JPEG or WebP, up to 10 MB, checked by content; SVG is
 refused) and stores it in Cloudflare R2 through the `app.LogoStore` port, implemented by
 `platform/objectstore` through `adapters/logos`. The bucket is private. The database keeps only `gyms.logo_key`;
 the catalog answers `logo_url`, a path like `/gyms/{id}/logo?v=<version>`, and `GET /gyms/{id}/logo` (public, no

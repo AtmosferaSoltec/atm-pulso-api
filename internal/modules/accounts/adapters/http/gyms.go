@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/app"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/domain"
@@ -49,6 +50,9 @@ func (h *Handler) ownerAction(c *gin.Context, reset bool) {
 	apierror.OK(c, owner)
 }
 
+// logoUploadTimeout is how long a logo may take to arrive.
+const logoUploadTimeout = 90 * time.Second
+
 // setLogo takes the image as the raw request body (PNG, JPEG or WebP); the use case
 // checks what it really is.
 func (h *Handler) setLogo(c *gin.Context) {
@@ -56,6 +60,8 @@ func (h *Handler) setLogo(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// A file takes longer to arrive than the server's default read timeout allows on a slow link.
+	_ = http.NewResponseController(c.Writer).SetReadDeadline(time.Now().Add(logoUploadTimeout))
 	data, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, app.MaxLogoBytes+1))
 	if err != nil {
 		var tooLarge *http.MaxBytesError

@@ -119,14 +119,19 @@ func SecurityHeaders() gin.HandlerFunc {
 }
 
 // BodyLimit cuts bodies larger than limit; when reading them the handler gets a
-// *http.MaxBytesError that apierror turns into a 413.
-func BodyLimit(limit int64) gin.HandlerFunc {
+// *http.MaxBytesError that apierror turns into a 413. overrides gives a route its own
+// limit, keyed "METHOD /full/path/with/:params" (for the few routes that take a file).
+func BodyLimit(limit int64, overrides map[string]int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if c.Request.ContentLength > limit {
+		maxBytes := limit
+		if routeLimit, ok := overrides[c.Request.Method+" "+c.FullPath()]; ok {
+			maxBytes = routeLimit
+		}
+		if c.Request.ContentLength > maxBytes {
 			apierror.Respond(c, apierror.ErrPayloadTooLarge)
 			return
 		}
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
 		c.Next()
 	}
 }
