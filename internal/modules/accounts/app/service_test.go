@@ -60,10 +60,11 @@ func (fakeTokens) Verify(token string, _ time.Time) (TokenClaims, error) {
 type fakeUsers struct {
 	byID     map[uuid.UUID]domain.Credentials
 	branches map[uuid.UUID][]uuid.UUID
+	gyms     map[uuid.UUID][]uuid.UUID
 }
 
 func newFakeUsers(users ...domain.Credentials) *fakeUsers {
-	f := &fakeUsers{byID: map[uuid.UUID]domain.Credentials{}, branches: map[uuid.UUID][]uuid.UUID{}}
+	f := &fakeUsers{byID: map[uuid.UUID]domain.Credentials{}, branches: map[uuid.UUID][]uuid.UUID{}, gyms: map[uuid.UUID][]uuid.UUID{}}
 	for _, u := range users {
 		f.byID[u.ID] = u
 	}
@@ -93,6 +94,10 @@ func (f *fakeUsers) FindByID(ctx context.Context, id uuid.UUID) (domain.User, er
 
 func (f *fakeUsers) BranchIDs(_ context.Context, id uuid.UUID) ([]uuid.UUID, error) {
 	return f.branches[id], nil
+}
+
+func (f *fakeUsers) GymIDs(_ context.Context, id uuid.UUID) ([]uuid.UUID, error) {
+	return f.gyms[id], nil
 }
 
 func (f *fakeUsers) ScopeOf(_ context.Context, u domain.User) (Scope, error) {
@@ -151,9 +156,6 @@ func credentials(role domain.Role, document string) domain.Credentials {
 	u := domain.User{ID: uuid.New(), DocumentNumber: document, FullName: "Andrea Salas", Role: role, IsActive: true, PasswordVersion: 1}
 	if role != domain.RoleSuperadmin {
 		u.OrganizationID = uuid.New()
-	}
-	if role == domain.RoleAdmin {
-		u.GymID = uuid.New()
 	}
 	return domain.Credentials{User: u, PasswordHash: "hash:" + password}
 }
@@ -251,6 +253,8 @@ func TestAuthenticate(t *testing.T) {
 		h := newHarness(t, owner, admin, reception, superadmin)
 		miraflores, barranco := uuid.New(), uuid.New()
 		h.users.branches[reception.ID] = []uuid.UUID{miraflores, barranco}
+		atlas, norte := uuid.New(), uuid.New()
+		h.users.gyms[admin.ID] = []uuid.UUID{atlas, norte}
 
 		token := func(c domain.Credentials) string {
 			issued, err := h.tokens.Issue(c.ID, c.PasswordVersion, start)
@@ -265,7 +269,7 @@ func TestAuthenticate(t *testing.T) {
 		p, err = h.service.Authenticate(ctx, token(admin))
 		require.NoError(t, err)
 		assert.Equal(t, auth.RoleAdmin, p.Role)
-		assert.Equal(t, admin.GymID, p.GymID)
+		assert.Equal(t, []uuid.UUID{atlas, norte}, p.GymIDs)
 
 		p, err = h.service.Authenticate(ctx, token(reception))
 		require.NoError(t, err)

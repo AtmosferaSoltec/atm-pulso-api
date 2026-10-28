@@ -94,7 +94,7 @@ func LoadFrom(lookup func(string) string) (Config, error) {
 			APIKey: r.optional("IDENTITY_API_KEY"),
 		},
 		Storage: StorageConfig{
-			Endpoint:        r.httpsURL("R2_ENDPOINT"),
+			Endpoint:        r.httpURL("R2_ENDPOINT"),
 			Bucket:          r.optional("R2_BUCKET"),
 			AccessKeyID:     r.optional("R2_ACCESS_KEY_ID"),
 			SecretAccessKey: r.optional("R2_SECRET_ACCESS_KEY"),
@@ -102,6 +102,9 @@ func LoadFrom(lookup func(string) string) (Config, error) {
 	}
 
 	if cfg.IsProduction() {
+		if strings.HasPrefix(cfg.Storage.Endpoint, "http://") {
+			r.fail("R2_ENDPOINT must be an https:// URL in production")
+		}
 		r.requireInProduction("IDENTITY_API_KEY", cfg.Identity.APIKey != "")
 		r.requireInProduction("R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY", cfg.Storage.Enabled())
 	}
@@ -184,15 +187,16 @@ func (r *reader) databaseURL(name string) string {
 	return value
 }
 
-// httpsURL is optional, but when present it must be an absolute https URL (a trailing
-// slash is dropped). The value is not printed: it may carry an account identifier.
-func (r *reader) httpsURL(name string) string {
+// httpURL is optional, but when present it must be an absolute http(s) URL (a trailing slash is
+// dropped). Plain http is only for a local S3-compatible server; production demands https.
+// The value is not printed: it may carry an account identifier.
+func (r *reader) httpURL(name string) string {
 	value := strings.TrimRight(r.optional(name), "/")
 	if value == "" {
 		return value
 	}
-	if parsed, err := url.Parse(value); err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		r.fail("%s must be an https:// URL", name)
+	if parsed, err := url.Parse(value); err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		r.fail("%s must be an http(s):// URL", name)
 	}
 	return value
 }

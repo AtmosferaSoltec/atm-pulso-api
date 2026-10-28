@@ -44,7 +44,7 @@ type userDTO struct {
 	Phone              *string     `json:"phone"`
 	Role               string      `json:"role"`
 	Organization       *namedDTO   `json:"organization"`
-	Gym                *namedDTO   `json:"gym"`
+	Gyms               []namedDTO  `json:"gyms"`
 	Branches           []branchDTO `json:"branches"`
 }
 
@@ -65,6 +65,7 @@ func toUserDTO(profile app.Profile) userDTO {
 		DocumentNumber:     user.DocumentNumber,
 		FullName:           user.FullName,
 		Role:               string(user.Role),
+		Gyms:               make([]namedDTO, 0, len(scope.Gyms)),
 		Branches:           make([]branchDTO, 0, len(scope.Branches)),
 	}
 	if user.Phone != "" {
@@ -73,8 +74,8 @@ func toUserDTO(profile app.Profile) userDTO {
 	if scope.Organization != nil {
 		dto.Organization = &namedDTO{ID: scope.Organization.ID.String(), Name: scope.Organization.Name}
 	}
-	if scope.Gym != nil {
-		dto.Gym = &namedDTO{ID: scope.Gym.ID.String(), Name: scope.Gym.Name}
+	for _, gym := range scope.Gyms {
+		dto.Gyms = append(dto.Gyms, namedDTO{ID: gym.ID.String(), Name: gym.Name})
 	}
 	for _, branch := range scope.Branches {
 		dto.Branches = append(dto.Branches, branchDTO{

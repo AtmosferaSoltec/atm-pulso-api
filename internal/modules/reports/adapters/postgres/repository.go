@@ -54,7 +54,8 @@ func (r *Repository) Payments(ctx context.Context, org uuid.UUID, f app.PaymentF
 		return nil, 0, err
 	}
 	rows, err := r.pool.Query(ctx, `SELECT p.id, p.paid_on, r.id, r.kind, r.number, COALESCE(ms.months, 0), p.amount::text, p.method,
-			m.id, m.full_name, m.document_type, m.document_number, d.customer_name, b.id, b.name `+paymentFrom+
+			m.id, m.full_name, m.document_type, m.document_number, d.customer_name, b.id, b.name,
+			(SELECT count(*)::int FROM payment_vouchers v WHERE v.payment_id = p.id AND v.organization_id = p.organization_id) `+paymentFrom+
 		` ORDER BY p.paid_on DESC, p.created_at DESC, p.id DESC LIMIT $8 OFFSET $9`, append(args(org, f), f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, 0, err
@@ -69,7 +70,7 @@ func (r *Repository) Payments(ctx context.Context, org uuid.UUID, f app.PaymentF
 		var memberID *uuid.UUID
 		var memberName *string
 		if err := rows.Scan(&row.ID, &paid, &row.Receipt.ID, &kind, &number, &months, &row.Amount, &row.Method,
-			&memberID, &memberName, &row.DocumentType, &row.Document, &row.VisitorName, &row.Branch.ID, &row.Branch.Name); err != nil {
+			&memberID, &memberName, &row.DocumentType, &row.Document, &row.VisitorName, &row.Branch.ID, &row.Branch.Name, &row.VoucherCount); err != nil {
 			return nil, 0, err
 		}
 		row.PaidOn, row.Kind = paid.Format("2006-01-02"), kind

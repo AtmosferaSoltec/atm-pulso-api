@@ -875,6 +875,97 @@ paths:
         "200": { description: The receipts., content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/ReceiptSummary" } } } } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/ApiError" }
+  /receipts/{id}/vouchers:
+    get:
+      tags: [vouchers]
+      summary: List the proofs of payment attached to a receipt's payment.
+      description: Oldest first. Same reach as the branch where the payment was collected; the superadmin consults with `X-Organization-Id`.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: The receipt id. }
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Voucher" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ApiError" }
+    post:
+      tags: [vouchers]
+      summary: Attach a proof of payment (photo or PDF) to a receipt's payment.
+      description: |
+        Optional and never for cash. The body is the file itself (not JSON): PNG, JPEG, WebP or PDF, at most 10 MB, checked by its content.
+        Up to 5 per payment (a payment split in several transfers). Vouchers cannot be edited or deleted: they are evidence.
+        Needs the right to operate in that branch (the superadmin only consults).
+        Answers 503 STORAGE_UNAVAILABLE when no object store is configured.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: The receipt id. }
+      requestBody:
+        required: true
+        content:
+          image/png: { schema: { type: string, format: binary } }
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+          application/pdf: { schema: { type: string, format: binary } }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Voucher" }
+        "400":
+          description: VALIDATION_FAILED with VOUCHER_NOT_FOR_CASH (field `receipt`), VOUCHER_TYPE_INVALID or VOUCHER_SIZE_INVALID (field `voucher`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "404": { $ref: "#/components/responses/ApiError" }
+        "409":
+          description: VOUCHER_LIMIT_REACHED.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: STORAGE_UNAVAILABLE.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /vouchers/{id}/file:
+    get:
+      tags: [vouchers]
+      summary: Download a voucher's file.
+      description: |
+        Private: only with a valid token and within the reach of the payment's branch. The web fetches it with the token and shows
+        it from the received bytes (an `<img src>` cannot send the token). The answer is cacheable only by the browser (`private`).
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: The voucher id. }
+      responses:
+        "200":
+          description: The file.
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+            application/pdf: { schema: { type: string, format: binary } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ApiError" }
+        "503":
+          description: STORAGE_UNAVAILABLE.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /receipts/{id}:
     get:
       tags: [members]
@@ -1324,7 +1415,7 @@ components:
               accessible: { type: boolean }
     TeamUser:
       type: object
-      required: [id, full_name, document_number, phone, role, is_active, is_self, gym, branches]
+      required: [id, full_name, document_number, phone, role, is_active, is_self, gyms, branches]
       properties:
         id: { type: string, format: uuid }
         full_name: { type: string }
@@ -1333,9 +1424,10 @@ components:
         role: { type: string, enum: [owner, admin, receptionist] }
         is_active: { type: boolean }
         is_self: { type: boolean }
-        gym:
-          description: The gym an admin manages. Null for the other roles.
-          oneOf: [{ $ref: "#/components/schemas/Named" }, { type: "null" }]
+        gyms:
+          type: array
+          description: The gyms an admin manages (one or more, chosen by the owner). Empty for the other roles.
+          items: { $ref: "#/components/schemas/Named" }
         branches:
           type: array
           items:
@@ -1353,7 +1445,11 @@ components:
         full_name: { type: string, minLength: 3, maxLength: 120 }
         document_number: { type: string, pattern: "^[0-9]{8}$" }
         role: { type: string, enum: [admin, receptionist] }
-        gym_id: { type: string, format: uuid, description: Required for admin. }
+        gym_ids:
+          type: array
+          minItems: 1
+          description: Required for admin (one or more gyms of the organization); refused for receptionist. Only an owner can create an admin.
+          items: { type: string, format: uuid }
         branch_ids:
           type: array
           description: Required for receptionist (one or more).
@@ -1365,7 +1461,11 @@ components:
         full_name: { type: string, minLength: 3, maxLength: 120 }
         document_number: { type: string, pattern: "^[0-9]{8}$" }
         role: { type: string, enum: [admin, receptionist] }
-        gym_id: { type: string, format: uuid }
+        gym_ids:
+          type: array
+          minItems: 1
+          description: Replaces the gyms of an admin. Only an owner can change them.
+          items: { type: string, format: uuid }
         branch_ids:
           type: array
           items: { type: string, format: uuid }
@@ -1381,6 +1481,14 @@ components:
           type: array
           description: Replaces the whole list and keeps its order. One price per duration, 1 to 24 months, at most 24 entries.
           items: { $ref: "#/components/schemas/MembershipPrice" }
+    Voucher:
+      type: object
+      required: [id, content_type, size_bytes, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        content_type: { type: string, enum: [image/png, image/jpeg, image/webp, application/pdf] }
+        size_bytes: { type: integer }
+        created_at: { type: string, format: date-time }
     MembershipPrice:
       type: object
       required: [months, amount]
@@ -1603,9 +1711,10 @@ components:
         created_at: { type: string, format: date-time }
     PaymentRow:
       type: object
-      required: [id, paid_on, receipt, kind, plan_label, amount, method, member, visitor_name, branch]
+      required: [id, paid_on, receipt, kind, plan_label, amount, method, member, visitor_name, branch, voucher_count]
       properties:
         id: { type: string, format: uuid }
+        voucher_count: { type: integer, minimum: 0, maximum: 5, description: How many proofs of payment are attached. }
         paid_on: { type: string, format: date }
         receipt: { $ref: "#/components/schemas/ReceiptRef" }
         kind: { type: string, enum: [membership, day_pass] }
@@ -1704,9 +1813,10 @@ components:
         organization:
           description: The client. Null for the superadmin.
           oneOf: [{ $ref: "#/components/schemas/Named" }, { type: "null" }]
-        gym:
-          description: The gym an admin manages. Null for the other roles.
-          oneOf: [{ $ref: "#/components/schemas/Named" }, { type: "null" }]
+        gyms:
+          type: array
+          description: Only an admin has gyms (one or more). Empty for the other roles.
+          items: { $ref: "#/components/schemas/Named" }
         branches:
           type: array
           description: Only a receptionist has assigned branches.

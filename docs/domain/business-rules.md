@@ -16,16 +16,21 @@ belong to exactly one organization. Everything the user sees is in Spanish; iden
 |---|---|---|---|
 | `superadmin` | inserted by hand (first) / by another superadmin later | none | consults any organization, **read-only** |
 | `owner` | superadmin, together with the client | its own | every gym and branch of the organization |
-| `admin` | the owner | its own | one gym (`gym_id`) and its branches |
-| `receptionist` | the owner, or an admin for its own gym | its own | only the branches assigned to it |
+| `admin` | the owner | its own | the gyms the owner assigned (one or several, `user_gyms`) and their branches |
+| `receptionist` | the owner, or an admin for the branches of its gyms | its own | only the branches assigned to it |
 
 - A person can have only one user: the **DNI is the login** and is unique system-wide.
 - Only the authorized superior may correct a user's DNI: superadmin for owners, owner for
-  admins/receptionists, and admin for receptionists entirely within its gym. No self-correction.
+  admins/receptionists, and admin for receptionists entirely within its gyms. No self-correction.
   Correction invalidates existing tokens. If a mandatory password change is pending, the temporary
   password becomes the corrected DNI; otherwise the chosen password remains unchanged.
 - **Only an owner creates admins. An admin only creates receptionists**, and only for branches of
-  its own gym. Nobody edits their own role or scope; nobody except the superadmin touches an owner.
+  its own gyms. Nobody edits their own role or scope; nobody except the superadmin touches an owner.
+- **An owner can have several gyms and decides which ones each admin manages.** An admin has at
+  least one gym and may have all of them or any subset; several admins may share a gym (e.g. with 5
+  gyms: two admins with 2 gyms each and a third with the remaining 1, or one admin over all 5). The
+  owner is the only one who sees everything and creates or reassigns admins; narrowing an admin's gyms
+  takes effect on its next request (the principal is rebuilt from the database every time).
 - Deactivating a user takes effect immediately (already guaranteed by `Authenticate`).
 - **Superadmin is read-only.** It "inspects" one organization at a time: org-scoped endpoints accept
   the header `X-Organization-Id` **only from a superadmin and only on `GET`**; any write by a
@@ -40,10 +45,10 @@ belong to exactly one organization. Everything the user sees is in Spanish; iden
 | Members | yes | yes | yes | inspect |
 | Access control | yes | yes | yes | inspect (no verify buttons) |
 | Payments list | yes | yes | yes, **without KPIs** | inspect |
-| Gyms and rules (*Gimnasios y reglas*) | all gyms | its gym | no | inspect |
-| Team (*Usuarios*) | all | receptionists of its gym + itself | no | inspect |
-| Prices (*Tarifas*) | all gyms | its gym | no | inspect |
-| Identity (*Identidad*) | all gyms | its gym | no | inspect |
+| Gyms and rules (*Gimnasios y reglas*) | all gyms | its gyms | no | inspect |
+| Team (*Usuarios*) | all | receptionists of its gyms + itself | no | inspect |
+| Prices (*Tarifas*) | all gyms | its gyms | no | inspect |
+| Identity (*Identidad*) | all gyms | its gyms | no | inspect |
 | Client panel (*Clientes y gimnasios*) | no | no | no | yes (its own home) |
 
 ## 3. Tenancy rules
@@ -53,7 +58,7 @@ belong to exactly one organization. Everything the user sees is in Spanish; iden
   organization references in a request body answer **400 SCOPE_NOT_ALLOWED**; inaccessible scope
   within the same organization answers **403 SCOPE_NOT_ALLOWED**.
 - Branch access: an owner reaches all branches of its organization; an admin the branches of its
-  gym; a receptionist the assigned ones (`auth.Principal.CanAccessBranch`). **Every endpoint that
+  gyms; a receptionist the assigned ones (`auth.Principal.CanAccessBranch`). **Every endpoint that
   takes a `branch_id` checks it with that method.**
 
 ## 4. Gyms and branches are created only by the superadmin  (`features/platform`)
@@ -187,13 +192,13 @@ the gym's admin or the owner. Logos and image uploads are deferred until all rea
 
 ## 15. Team  (`features/team`)
 
-- Fields: `full_name`, `document_number` (DNI), `role`, `gym_id` (admins), `branch_ids` (receptionists),
+- Fields: `full_name`, `document_number` (DNI), `role`, `gym_ids` (admins: one or more), `branch_ids` (receptionists),
   `is_active`, optional `phone` (the user edits it in their profile).
 - A newly created user's initial password is their DNI, hashed with argon2id. Creation accepts no
   caller-selected password. `must_change_password` is true on creation and manager reset.
 - There is no email recovery. An authorized manager resets the password to the user's DNI, bumps
   `password_version` to invalidate existing tokens, and requires another password change. The owner
-  manages admins and receptionists; an admin manages receptionists entirely within its gym; the
+  manages admins and receptionists; an admin manages receptionists entirely within its gyms; the
   superadmin manages owners through platform operations.
 - Login with the temporary password returns a restricted token and `must_change_password: true`.
   Until the password is changed, only `GET /me` and `POST /me/password` are available; every other
@@ -207,7 +212,8 @@ the gym's admin or the owner. Logos and image uploads are deferred until all rea
 - An owner or admin can deactivate and reactivate users, never themselves. Deactivating never deletes
   history.
 - Who is listed: an owner sees every user of its organization; an admin sees itself and the
-  receptionists of its gym; nobody sees the superadmin.
+  receptionists of its gyms (all their branches inside gyms the admin manages); nobody sees the
+  superadmin nor other admins.
 
 ## 16. Platform panel (superadmin)  (`features/platform`)
 

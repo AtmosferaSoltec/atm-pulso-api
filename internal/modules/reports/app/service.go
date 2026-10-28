@@ -58,18 +58,20 @@ type PaymentFilter struct {
 
 // PaymentRow is one payment with its receipt.
 type PaymentRow struct {
-	ID           uuid.UUID  `json:"id"`
-	PaidOn       string     `json:"paid_on"`
-	Receipt      ReceiptRef `json:"receipt"`
-	Kind         string     `json:"kind"`
-	PlanLabel    string     `json:"plan_label"`
-	Amount       string     `json:"amount"`
-	Method       string     `json:"method"`
-	Member       *MemberRef `json:"member"`
-	VisitorName  *string    `json:"visitor_name"`
-	Branch       BranchRef  `json:"branch"`
-	DocumentType *string    `json:"-"`
-	Document     *string    `json:"-"`
+	ID          uuid.UUID  `json:"id"`
+	PaidOn      string     `json:"paid_on"`
+	Receipt     ReceiptRef `json:"receipt"`
+	Kind        string     `json:"kind"`
+	PlanLabel   string     `json:"plan_label"`
+	Amount      string     `json:"amount"`
+	Method      string     `json:"method"`
+	Member      *MemberRef `json:"member"`
+	VisitorName *string    `json:"visitor_name"`
+	Branch      BranchRef  `json:"branch"`
+	// VoucherCount is how many proofs of payment (photos, PDFs) are attached.
+	VoucherCount int     `json:"voucher_count"`
+	DocumentType *string `json:"-"`
+	Document     *string `json:"-"`
 }
 
 // ReceiptRef points to a receipt.

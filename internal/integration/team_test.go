@@ -16,7 +16,7 @@ func TestTeamCreationAndScope(t *testing.T) {
 	h := newHarness(t)
 	tn, other := h.newTenant(t), h.newTenant(t)
 	owner, admin := h.token(t, tn.Owner, demoPassword), h.token(t, tn.Admin, demoPassword)
-	input := app.NewUser{ID: uuid.New(), FullName: "New Admin", DocumentNumber: uniqueDocument(), Role: domain.RoleAdmin, GymID: tn.GymOne}
+	input := app.NewUser{ID: uuid.New(), FullName: "New Admin", DocumentNumber: uniqueDocument(), Role: domain.RoleAdmin, GymIDs: []uuid.UUID{tn.GymOne}}
 	assert.Equal(t, "ROLE_NOT_ASSIGNABLE", h.call(t, http.MethodPost, "/users", admin, input).errorCode())
 	created := h.call(t, http.MethodPost, "/users", owner, input)
 	require.Equal(t, http.StatusCreated, created.status, created.body)
@@ -52,6 +52,58 @@ func TestTeamCreationAndScope(t *testing.T) {
 			}
 		}
 	}
+}
+
+// One owner, several gyms: the owner decides which gyms each admin manages, an admin sees
+// and reaches only those, and an admin can never create another admin.
+func TestAdminManagesSeveralGyms(t *testing.T) {
+	h := newHarness(t)
+	tn, other := h.newTenant(t), h.newTenant(t)
+	owner := h.token(t, tn.Owner, demoPassword)
+
+	both := app.NewUser{ID: uuid.New(), FullName: "Admin Dos Gyms", DocumentNumber: uniqueDocument(), Role: domain.RoleAdmin, GymIDs: []uuid.UUID{tn.GymOne, tn.GymTwo, tn.GymTwo}}
+	created := h.call(t, http.MethodPost, "/users", owner, both)
+	require.Equal(t, http.StatusCreated, created.status, created.body)
+	assert.Len(t, created.data()["gyms"], 2, "a repeated gym is stored once")
+
+	invalid := both
+	invalid.ID, invalid.DocumentNumber, invalid.GymIDs = uuid.New(), uniqueDocument(), nil
+	assert.Equal(t, "GYM_REQUIRED", fieldCode(h.call(t, http.MethodPost, "/users", owner, invalid)), "an admin needs at least one gym")
+	invalid.GymIDs = []uuid.UUID{tn.GymOne, other.GymOne}
+	assert.Equal(t, "SCOPE_NOT_ALLOWED", h.call(t, http.MethodPost, "/users", owner, invalid).errorCode(), "a gym of another organization is refused")
+	reception := app.NewUser{ID: uuid.New(), FullName: "Recepcion", DocumentNumber: uniqueDocument(), Role: domain.RoleReceptionist, BranchIDs: []uuid.UUID{tn.BranchA}, GymIDs: []uuid.UUID{tn.GymOne}}
+	assert.Equal(t, "SCOPE_INVALID", fieldCode(h.call(t, http.MethodPost, "/users", owner, reception)), "only admins carry gyms")
+
+	token := h.token(t, both.DocumentNumber, both.DocumentNumber)
+	require.Equal(t, 200, h.call(t, http.MethodPost, "/me/password", token, map[string]string{"current_password": both.DocumentNumber, "new_password": "ChangedPassword123!"}).status)
+	admin := h.token(t, both.DocumentNumber, "ChangedPassword123!")
+
+	me := h.call(t, http.MethodGet, "/me", admin, nil)
+	require.Equal(t, 200, me.status, me.body)
+	assert.Len(t, me.data()["gyms"], 2)
+
+	catalog := h.call(t, http.MethodGet, "/catalog", admin, nil)
+	require.Equal(t, 200, catalog.status, catalog.body)
+	for _, raw := range catalog.data()["gyms"].([]any) {
+		for _, b := range raw.(map[string]any)["branches"].([]any) {
+			assert.Equal(t, true, b.(map[string]any)["accessible"], "every branch of both gyms is reachable")
+		}
+	}
+
+	// An admin never creates another admin, but creates reception for any of its gyms.
+	assert.Equal(t, "ROLE_NOT_ASSIGNABLE", h.call(t, http.MethodPost, "/users", admin, app.NewUser{ID: uuid.New(), FullName: "Otro Admin", DocumentNumber: uniqueDocument(), Role: domain.RoleAdmin, GymIDs: []uuid.UUID{tn.GymOne}}).errorCode())
+	for _, branch := range []uuid.UUID{tn.BranchA, tn.BranchC} {
+		result := h.call(t, http.MethodPost, "/users", admin, app.NewUser{ID: uuid.New(), FullName: "Recepcion", DocumentNumber: uniqueDocument(), Role: domain.RoleReceptionist, BranchIDs: []uuid.UUID{branch}})
+		assert.Equal(t, 201, result.status, result.body)
+	}
+
+	// The owner narrows the admin to one gym: the change takes effect on the next request.
+	narrowed := h.call(t, http.MethodPatch, "/users/"+both.ID.String(), owner, map[string]any{"gym_ids": []uuid.UUID{tn.GymTwo}})
+	require.Equal(t, 200, narrowed.status, narrowed.body)
+	assert.Len(t, narrowed.data()["gyms"], 1)
+	assert.Equal(t, 403, h.call(t, http.MethodPost, "/users", admin, app.NewUser{ID: uuid.New(), FullName: "Recepcion", DocumentNumber: uniqueDocument(), Role: domain.RoleReceptionist, BranchIDs: []uuid.UUID{tn.BranchA}}).status)
+	assert.Equal(t, 200, h.call(t, http.MethodPatch, "/gyms/"+tn.GymTwo.String(), admin, map[string]any{"branch_sharing": true}).status)
+	assert.Equal(t, 403, h.call(t, http.MethodPatch, "/gyms/"+tn.GymOne.String(), admin, map[string]any{"branch_sharing": true}).status)
 }
 func TestTeamMutationIsolationAndPasswordReset(t *testing.T) {
 	h := newHarness(t)
@@ -112,4 +164,14 @@ func TestPlatformOwnerCorrectionAndReset(t *testing.T) {
 	assert.Equal(t, 401, h.call(t, http.MethodGet, "/me", token, nil).status)
 	temporary := h.token(t, document, document)
 	assert.Equal(t, "PASSWORD_CHANGE_REQUIRED", h.call(t, http.MethodGet, "/catalog", temporary, nil).errorCode())
+}
+
+// fieldCode is the code of the first validation detail of an error response.
+func fieldCode(r response) string {
+	details, _ := r.body["error"].(map[string]any)["details"].([]any)
+	if len(details) == 0 {
+		return ""
+	}
+	code, _ := details[0].(map[string]any)["code"].(string)
+	return code
 }

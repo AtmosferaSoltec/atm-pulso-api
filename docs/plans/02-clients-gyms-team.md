@@ -118,18 +118,18 @@ superadmin → 403.
 ```json
 { "data": [ { "id": "...", "full_name": "Carlos Medina", "document_number": "10000005", "phone": null,
    "role": "admin", "is_active": true, "is_self": false,
-   "gym": { "id": "...", "name": "Atlas Fitness" }, "branches": [] } ], "meta": { "...": 1 } }
+   "gyms": [ { "id": "...", "name": "Atlas Fitness" } ], "branches": [] } ], "meta": { "...": 1 } }
 ```
-Visibility: owner sees every user of its organization; admin sees itself and the receptionists of its gym (every
-branch of the receptionist must belong to the admin's gym). Nobody sees the superadmin.
+Visibility: owner sees every user of its organization; admin sees itself and the receptionists of its gyms (every
+branch of the receptionist must belong to a gym the admin manages). Nobody sees the superadmin.
 
-`POST /users`: `{ "id?", "full_name", "document_number", "role": "admin|receptionist", "gym_id" (admin), "branch_ids" (receptionist) }`.
-`PATCH /users/{id}`: `{ full_name?, document_number?, role?, gym_id?, branch_ids? }` (DNI corrections by authorized superiors only; see business-rules §2).
+`POST /users`: `{ "id?", "full_name", "document_number", "role": "admin|receptionist", "gym_ids" (admin: one or more), "branch_ids" (receptionist) }`.
+`PATCH /users/{id}`: `{ full_name?, document_number?, role?, gym_ids?, branch_ids? }` (DNI corrections by authorized superiors only; see business-rules §2).
 `POST /users/{id}/deactivate`, `POST /users/{id}/activate`, `POST /users/{id}/password` without a caller-selected password
 (a manager resets it to the DNI; it bumps `password_version` and requires a password change).
 
 Rules: only an owner may create or change an `admin`; an admin only creates/edits receptionists whose branches are all in
-its gym; a receptionist needs 1+ branches; branches and gym must belong to the caller's organization (a foreign id is a
+gyms the admin manages; an admin needs 1+ gyms and a receptionist 1+ branches; branches and gyms must belong to the caller's organization (a foreign id is a
 400 `SCOPE_NOT_ALLOWED`... see codes); nobody modifies themselves, an owner (except the superadmin) or a user outside their
 reach; the DNI is unique system-wide.
 

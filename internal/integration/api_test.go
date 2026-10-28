@@ -28,6 +28,8 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers"
+	vouchersdomain "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers/domain"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/health"
@@ -44,9 +46,10 @@ const (
 
 // harness is the API assembled like cmd/api does, on a migrated database.
 type harness struct {
-	router *gin.Engine
-	pool   *pgxpool.Pool
-	logos  *memoryLogos
+	router   *gin.Engine
+	pool     *pgxpool.Pool
+	logos    *memoryLogos
+	vouchers *memoryVouchers
 }
 
 func newHarness(t *testing.T) harness {
@@ -54,12 +57,12 @@ func newHarness(t *testing.T) harness {
 	pool := testsupport.MigratedPool(t)
 
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	router, api, err := httpserver.NewRouter(httpserver.Options{Logger: quiet, RateLimitPerMinute: 100_000, BodyLimits: map[string]int64{"PUT " + httpserver.APIPrefix + "/gyms/:gym_id/logo": app.MaxLogoBytes + 1}})
+	router, api, err := httpserver.NewRouter(httpserver.Options{Logger: quiet, RateLimitPerMinute: 100_000, BodyLimits: map[string]int64{"PUT " + httpserver.APIPrefix + "/gyms/:gym_id/logo": app.MaxLogoBytes + 1, "POST " + httpserver.APIPrefix + "/receipts/:id/vouchers": vouchersdomain.MaxBytes + 1}})
 	require.NoError(t, err)
 
 	health.Register(api, pool)
 
-	logos := newMemoryLogos()
+	logos, voucherStore := newMemoryLogos(), newMemoryVouchers()
 	accountsModule, err := accounts.New(accounts.Deps{Pool: pool, Clock: clock.System{}, JWTSecret: jwtSecret, AccessTokenTTL: 8 * time.Hour, Logos: logos})
 	require.NoError(t, err)
 	limited := api.Group("", middleware.NewRateLimiter(100_000).Middleware())
@@ -70,8 +73,9 @@ func newHarness(t *testing.T) harness {
 	scope := auth.OrganizationScope(accountsModule.Organizations())
 	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
+	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected, scope)
 	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope, middleware.NewRateLimiter(100_000).Middleware())
-	return harness{router: router, pool: pool, logos: logos}
+	return harness{router: router, pool: pool, logos: logos, vouchers: voucherStore}
 }
 
 type response struct {
@@ -181,7 +185,16 @@ func TestLoginAndMeForEveryRole(t *testing.T) {
 				return nil
 			}
 			assert.Equal(t, tc.organization, name("organization"))
-			assert.Equal(t, tc.gym, name("gym"))
+			var gymNames []any
+			gyms, _ := user["gyms"].([]any)
+			for _, g := range gyms {
+				gymNames = append(gymNames, g.(map[string]any)["name"])
+			}
+			if tc.gym == nil {
+				assert.Empty(t, gymNames, "only admins carry gyms")
+			} else {
+				assert.Equal(t, []any{tc.gym}, gymNames)
+			}
 
 			branches, _ := user["branches"].([]any)
 			var names []string
@@ -358,18 +371,24 @@ func TestDatabaseEnforcesTenancyAndRoleRules(t *testing.T) {
 	tn := h.newTenant(t)
 	other := h.newTenant(t)
 
-	insert := func(document, role string, organization, gym any) error {
-		_, err := h.pool.Exec(ctx, `INSERT INTO users (id, organization_id, gym_id, document_number, full_name, role, password_hash)
-			VALUES ($1, $2, $3, $4, 'Persona', $5, $6)`, ids.New(), organization, gym, document, role, hash)
+	insert := func(document, role string, organization any) error {
+		_, err := h.pool.Exec(ctx, `INSERT INTO users (id, organization_id, document_number, full_name, role, password_hash)
+			VALUES ($1, $2, $3, 'Persona', $4, $5)`, ids.New(), organization, document, role, hash)
 		return err
 	}
 
-	assert.Error(t, insert(uniqueDocument(), "admin", tn.OrganizationID, other.GymOne), "an admin cannot manage a gym of another organization")
-	assert.Error(t, insert(uniqueDocument(), "owner", nil, nil), "an owner needs an organization")
-	assert.Error(t, insert(uniqueDocument(), "superadmin", tn.OrganizationID, nil), "the superadmin belongs to no organization")
-	assert.Error(t, insert(uniqueDocument(), "admin", tn.OrganizationID, nil), "an admin needs a gym")
-	assert.Error(t, insert(uniqueDocument(), "cashier", tn.OrganizationID, nil), "unknown roles are refused")
-	assert.Error(t, insert("1000000", "owner", tn.OrganizationID, nil), "a DNI has eight digits")
-	assert.Error(t, insert(tn.Owner, "owner", tn.OrganizationID, nil), "the DNI is the login: it is unique")
-	assert.NoError(t, insert(uniqueDocument(), "admin", tn.OrganizationID, tn.GymTwo), "an admin of its own organization's gym is fine")
+	assert.Error(t, insert(uniqueDocument(), "owner", nil), "an owner needs an organization")
+	assert.Error(t, insert(uniqueDocument(), "superadmin", tn.OrganizationID), "the superadmin belongs to no organization")
+	assert.Error(t, insert(uniqueDocument(), "cashier", tn.OrganizationID), "unknown roles are refused")
+	assert.Error(t, insert("1000000", "owner", tn.OrganizationID), "a DNI has eight digits")
+	assert.Error(t, insert(tn.Owner, "owner", tn.OrganizationID), "the DNI is the login: it is unique")
+
+	link := func(userID, gymID, organization uuid.UUID) error {
+		_, err := h.pool.Exec(ctx, `INSERT INTO user_gyms (user_id, gym_id, organization_id) VALUES ($1, $2, $3)`, userID, gymID, organization)
+		return err
+	}
+	assert.Error(t, link(tn.AdminID, other.GymOne, tn.OrganizationID), "an admin cannot manage a gym of another organization")
+	assert.Error(t, link(tn.AdminID, other.GymOne, other.OrganizationID), "nor can a link borrow another organization's id")
+	assert.Error(t, link(tn.AdminID, tn.GymOne, tn.OrganizationID), "the same gym is not linked twice")
+	assert.NoError(t, link(tn.AdminID, tn.GymTwo, tn.OrganizationID), "an admin can manage a second gym of its own organization")
 }

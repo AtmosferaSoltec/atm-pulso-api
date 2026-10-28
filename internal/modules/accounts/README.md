@@ -4,8 +4,8 @@ Owns **who can sign in and what they can see**: organizations (clients), gyms, b
 users, plus login and the user's own profile.
 
 ## Tables (it owns them)
-`organizations`, `gyms`, `branches`, `users`, `user_branches`. The database enforces the rules
-that must never be broken: an admin's gym belongs to the admin's organization (composite FK),
+`organizations`, `gyms`, `branches`, `users`, `user_gyms`, `user_branches`. The database enforces the rules
+that must never be broken: an admin's gyms (`user_gyms`, one or several) belong to the admin's organization (composite FK),
 every role has exactly the scope it needs (`CHECK`), and a DNI is unique system-wide.
 
 ## Use cases (`app.Service`)

@@ -12,15 +12,15 @@ import (
 )
 
 type TeamUser struct {
-	ID             uuid.UUID    `json:"id"`
-	FullName       string       `json:"full_name"`
-	DocumentNumber string       `json:"document_number"`
-	Phone          *string      `json:"phone"`
-	Role           domain.Role  `json:"role"`
-	IsActive       bool         `json:"is_active"`
-	IsSelf         bool         `json:"is_self"`
-	Gym            *CatalogName `json:"gym"`
-	Branches       []TeamBranch `json:"branches"`
+	ID             uuid.UUID     `json:"id"`
+	FullName       string        `json:"full_name"`
+	DocumentNumber string        `json:"document_number"`
+	Phone          *string       `json:"phone"`
+	Role           domain.Role   `json:"role"`
+	IsActive       bool          `json:"is_active"`
+	IsSelf         bool          `json:"is_self"`
+	Gyms           []CatalogName `json:"gyms"`
+	Branches       []TeamBranch  `json:"branches"`
 }
 
 type TeamBranch struct {
@@ -34,7 +34,7 @@ type NewUser struct {
 	FullName       string      `json:"full_name"`
 	DocumentNumber string      `json:"document_number"`
 	Role           domain.Role `json:"role"`
-	GymID          uuid.UUID   `json:"gym_id"`
+	GymIDs         []uuid.UUID `json:"gym_ids"`
 	BranchIDs      []uuid.UUID `json:"branch_ids"`
 }
 
@@ -42,7 +42,7 @@ type UserChanges struct {
 	FullName       *string      `json:"full_name"`
 	DocumentNumber *string      `json:"document_number"`
 	Role           *domain.Role `json:"role"`
-	GymID          *uuid.UUID   `json:"gym_id"`
+	GymIDs         *[]uuid.UUID `json:"gym_ids"`
 	BranchIDs      *[]uuid.UUID `json:"branch_ids"`
 }
 
@@ -50,13 +50,14 @@ type UserChanges struct {
 type ManagedUser struct {
 	Credentials domain.Credentials
 	Branches    []TeamBranch
-	Gym         *CatalogName
+	Gyms        []CatalogName
 }
 
 type TeamTransaction interface {
 	User(context.Context, uuid.UUID) (ManagedUser, error)
 	Users(context.Context) ([]ManagedUser, error)
-	GymExists(context.Context, uuid.UUID) (bool, error)
+	// Gym returns domain.ErrForeignScope when the gym is not in the organization.
+	Gym(context.Context, uuid.UUID) (CatalogName, error)
 	Branch(context.Context, uuid.UUID) (TeamBranch, error)
 	Save(context.Context, ManagedUser, bool) error
 }
@@ -75,7 +76,11 @@ func teamView(user ManagedUser, self uuid.UUID) TeamUser {
 	if branches == nil {
 		branches = []TeamBranch{}
 	}
-	return TeamUser{ID: c.ID, FullName: c.FullName, DocumentNumber: c.DocumentNumber, Phone: phone, Role: c.Role, IsActive: c.IsActive, IsSelf: c.ID == self, Gym: user.Gym, Branches: branches}
+	gyms := user.Gyms
+	if gyms == nil {
+		gyms = []CatalogName{}
+	}
+	return TeamUser{ID: c.ID, FullName: c.FullName, DocumentNumber: c.DocumentNumber, Phone: phone, Role: c.Role, IsActive: c.IsActive, IsSelf: c.ID == self, Gyms: gyms, Branches: branches}
 }
 func teamVisible(p auth.Principal, user ManagedUser) bool {
 	if p.Role == auth.RoleOwner || p.Role == auth.RoleSuperadmin {
@@ -91,7 +96,7 @@ func teamVisible(p auth.Principal, user ManagedUser) bool {
 		return false
 	}
 	for _, branch := range user.Branches {
-		if branch.GymID != p.GymID {
+		if !slices.Contains(p.GymIDs, branch.GymID) {
 			return false
 		}
 	}
@@ -142,28 +147,31 @@ func assignScope(ctx context.Context, tx TeamTransaction, p auth.Principal, user
 		return domain.ErrRoleNotAssignable
 	}
 	user.Credentials.Role = input.Role
-	user.Credentials.GymID = uuid.Nil
-	user.Gym = nil
+	user.Gyms = []CatalogName{}
 	user.Branches = []TeamBranch{}
 	if input.Role == domain.RoleAdmin {
-		if input.GymID == uuid.Nil {
-			return fieldError("gym_id", "GYM_REQUIRED")
+		if len(input.GymIDs) == 0 {
+			return fieldError("gym_ids", "GYM_REQUIRED")
 		}
 		if len(input.BranchIDs) > 0 {
 			return fieldError("branch_ids", "SCOPE_INVALID")
 		}
-		exists, err := tx.GymExists(ctx, input.GymID)
-		if err != nil {
-			return err
+		seen := []uuid.UUID{}
+		for _, id := range input.GymIDs {
+			if slices.Contains(seen, id) {
+				continue
+			}
+			seen = append(seen, id)
+			gym, err := tx.Gym(ctx, id)
+			if err != nil {
+				return err
+			}
+			user.Gyms = append(user.Gyms, gym)
 		}
-		if !exists {
-			return domain.ErrForeignScope
-		}
-		user.Credentials.GymID = input.GymID
 		return nil
 	}
-	if input.GymID != uuid.Nil {
-		return fieldError("gym_id", "SCOPE_INVALID")
+	if len(input.GymIDs) > 0 {
+		return fieldError("gym_ids", "SCOPE_INVALID")
 	}
 	if len(input.BranchIDs) == 0 {
 		return fieldError("branch_ids", "BRANCH_REQUIRED")
@@ -253,20 +261,23 @@ func (s *Service) UpdateUser(ctx context.Context, p auth.Principal, id uuid.UUID
 				user.Credentials.PasswordHash = hash
 			}
 		}
-		if input.Role != nil || input.GymID != nil || input.BranchIDs != nil {
-			scope := NewUser{Role: user.Credentials.Role, GymID: user.Credentials.GymID}
+		if input.Role != nil || input.GymIDs != nil || input.BranchIDs != nil {
+			scope := NewUser{Role: user.Credentials.Role}
+			for _, g := range user.Gyms {
+				scope.GymIDs = append(scope.GymIDs, g.ID)
+			}
 			for _, b := range user.Branches {
 				scope.BranchIDs = append(scope.BranchIDs, b.ID)
 			}
 			if input.Role != nil {
 				scope.Role = *input.Role
 				if scope.Role != user.Credentials.Role {
-					scope.GymID = uuid.Nil
+					scope.GymIDs = nil
 					scope.BranchIDs = nil
 				}
 			}
-			if input.GymID != nil {
-				scope.GymID = *input.GymID
+			if input.GymIDs != nil {
+				scope.GymIDs = *input.GymIDs
 			}
 			if input.BranchIDs != nil {
 				scope.BranchIDs = *input.BranchIDs

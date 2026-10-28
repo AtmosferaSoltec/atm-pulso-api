@@ -23,17 +23,16 @@ type Repository struct {
 // NewRepository returns a repository on pool.
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
-const userColumns = `id, organization_id, gym_id, document_number, full_name, phone, role, is_active, password_version, must_change_password`
+const userColumns = `id, organization_id, document_number, full_name, phone, role, is_active, password_version, must_change_password`
 
 func scanUser(row pgx.Row, extra ...any) (domain.User, error) {
 	var (
 		user         domain.User
 		organization *uuid.UUID
-		gym          *uuid.UUID
 		phone        *string
 		role         string
 	)
-	dest := append([]any{&user.ID, &organization, &gym, &user.DocumentNumber, &user.FullName, &phone, &role, &user.IsActive, &user.PasswordVersion, &user.MustChangePassword}, extra...)
+	dest := append([]any{&user.ID, &organization, &user.DocumentNumber, &user.FullName, &phone, &role, &user.IsActive, &user.PasswordVersion, &user.MustChangePassword}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.User{}, domain.ErrUserNotFound
@@ -42,9 +41,6 @@ func scanUser(row pgx.Row, extra ...any) (domain.User, error) {
 	}
 	if organization != nil {
 		user.OrganizationID = *organization
-	}
-	if gym != nil {
-		user.GymID = *gym
 	}
 	if phone != nil {
 		user.Phone = *phone
@@ -96,10 +92,28 @@ func (r *Repository) BranchIDs(ctx context.Context, userID uuid.UUID) ([]uuid.UU
 	return branchIDs, rows.Err()
 }
 
+// GymIDs returns the gyms an admin manages.
+func (r *Repository) GymIDs(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.pool.Query(ctx, `SELECT gym_id FROM user_gyms WHERE user_id = $1 ORDER BY gym_id`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("query user gyms: %w", err)
+	}
+	defer rows.Close()
+	gymIDs := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan user gym: %w", err)
+		}
+		gymIDs = append(gymIDs, id)
+	}
+	return gymIDs, rows.Err()
+}
+
 // ScopeOf names the organization, gym and branches the user belongs to. Every lookup
 // is filtered by the user's organization, so a bad row can never leak another client's names.
 func (r *Repository) ScopeOf(ctx context.Context, user domain.User) (app.Scope, error) {
-	scope := app.Scope{Branches: []app.BranchRef{}}
+	scope := app.Scope{Gyms: []app.Named{}, Branches: []app.BranchRef{}}
 	if user.OrganizationID == uuid.Nil {
 		return scope, nil
 	}
@@ -112,14 +126,27 @@ func (r *Repository) ScopeOf(ctx context.Context, user domain.User) (app.Scope, 
 	}
 	scope.Organization = &organization
 
-	if user.GymID != uuid.Nil {
-		var gym app.Named
-		err := r.pool.QueryRow(ctx, `SELECT id, name FROM gyms WHERE id = $1 AND organization_id = $2`, user.GymID, user.OrganizationID).
-			Scan(&gym.ID, &gym.Name)
+	if user.Role == domain.RoleAdmin {
+		rows, err := r.pool.Query(ctx, `
+			SELECT g.id, g.name
+			FROM user_gyms ug
+			JOIN gyms g ON g.id = ug.gym_id AND g.organization_id = ug.organization_id
+			WHERE ug.user_id = $1 AND ug.organization_id = $2
+			ORDER BY g.name, g.id`, user.ID, user.OrganizationID)
 		if err != nil {
-			return app.Scope{}, fmt.Errorf("query gym: %w", err)
+			return app.Scope{}, fmt.Errorf("query gyms: %w", err)
 		}
-		scope.Gym = &gym
+		defer rows.Close()
+		for rows.Next() {
+			var gym app.Named
+			if err := rows.Scan(&gym.ID, &gym.Name); err != nil {
+				return app.Scope{}, fmt.Errorf("scan gym: %w", err)
+			}
+			scope.Gyms = append(scope.Gyms, gym)
+		}
+		if err := rows.Err(); err != nil {
+			return app.Scope{}, err
+		}
 	}
 
 	if user.Role == domain.RoleReceptionist {

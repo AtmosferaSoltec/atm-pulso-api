@@ -3,14 +3,13 @@ package domain
 import "github.com/google/uuid"
 
 // User is a person who signs in. The scope depends on the role: the superadmin has
-// no organization, an owner has the whole organization, an admin has one gym
-// (GymID) and a receptionist has assigned branches (kept in user_branches).
+// no organization, an owner has the whole organization, an admin has the gyms the
+// owner assigned (kept in user_gyms) and a receptionist has assigned branches (kept
+// in user_branches).
 type User struct {
 	ID uuid.UUID
 	// OrganizationID is uuid.Nil for the superadmin.
 	OrganizationID uuid.UUID
-	// GymID is the gym an admin manages; uuid.Nil for the other roles.
-	GymID          uuid.UUID
 	DocumentNumber string
 	FullName       string
 	// Phone is empty when the user did not give one.

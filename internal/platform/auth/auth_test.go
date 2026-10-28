@@ -12,9 +12,12 @@ func TestPrincipalScope(t *testing.T) {
 	miraflores := BranchRef{ID: uuid.New(), GymID: atlas}
 	barranco := BranchRef{ID: uuid.New(), GymID: atlas}
 	olivos := BranchRef{ID: uuid.New(), GymID: norte}
+	sur := uuid.New()
+	chorrillos := BranchRef{ID: uuid.New(), GymID: sur}
 
 	owner := Principal{Role: RoleOwner}
-	admin := Principal{Role: RoleAdmin, GymID: atlas}
+	admin := Principal{Role: RoleAdmin, GymIDs: []uuid.UUID{atlas}}
+	multiAdmin := Principal{Role: RoleAdmin, GymIDs: []uuid.UUID{atlas, norte}}
 	reception := Principal{Role: RoleReceptionist, BranchIDs: []uuid.UUID{miraflores.ID}}
 	superadmin := Principal{Role: RoleSuperadmin}
 
@@ -26,6 +29,10 @@ func TestPrincipalScope(t *testing.T) {
 		assert.True(t, admin.CanAccessBranch(miraflores))
 		assert.True(t, admin.CanAccessBranch(barranco))
 		assert.False(t, admin.CanAccessBranch(olivos), "admin stays inside their gym")
+		assert.True(t, multiAdmin.CanAccessBranch(miraflores))
+		assert.True(t, multiAdmin.CanAccessBranch(olivos), "an admin with several gyms reaches all of them")
+		assert.False(t, multiAdmin.CanAccessBranch(chorrillos), "but not the gyms the owner did not assign")
+		assert.False(t, Principal{Role: RoleAdmin}.CanAccessBranch(miraflores), "an admin without gyms reaches nothing")
 		assert.True(t, reception.CanAccessBranch(miraflores))
 		assert.False(t, reception.CanAccessBranch(barranco), "reception only has assigned branches")
 		assert.False(t, Principal{Role: "unknown"}.CanAccessBranch(miraflores))
@@ -36,6 +43,8 @@ func TestPrincipalScope(t *testing.T) {
 		assert.True(t, owner.CanManageGym(norte))
 		assert.True(t, admin.CanManageGym(atlas))
 		assert.False(t, admin.CanManageGym(norte))
+		assert.True(t, multiAdmin.CanManageGym(atlas) && multiAdmin.CanManageGym(norte))
+		assert.False(t, multiAdmin.CanManageGym(sur))
 		assert.False(t, reception.CanManageGym(atlas))
 		assert.False(t, superadmin.CanManageGym(atlas), "superadmin only consults")
 	})

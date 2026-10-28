@@ -142,8 +142,13 @@ func (s *Service) Authenticate(ctx context.Context, accessToken string) (auth.Pr
 		UserID:             user.ID,
 		OrganizationID:     user.OrganizationID,
 		Role:               auth.Role(user.Role),
-		GymID:              user.GymID,
 		MustChangePassword: user.MustChangePassword,
+	}
+	if user.Role == domain.RoleAdmin {
+		principal.GymIDs, err = s.Users.GymIDs(ctx, user.ID)
+		if err != nil {
+			return auth.Principal{}, fmt.Errorf("load gyms: %w", err)
+		}
 	}
 	if user.Role == domain.RoleReceptionist {
 		principal.BranchIDs, err = s.Users.BranchIDs(ctx, user.ID)

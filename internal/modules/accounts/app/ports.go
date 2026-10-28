@@ -20,7 +20,9 @@ type UserRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (domain.User, error)
 	// BranchIDs are the branches a receptionist works in.
 	BranchIDs(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error)
-	// ScopeOf describes the organization, gym and branches the user belongs to.
+	// GymIDs are the gyms an admin manages.
+	GymIDs(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error)
+	// ScopeOf describes the organization, gyms and branches the user belongs to.
 	ScopeOf(ctx context.Context, user domain.User) (Scope, error)
 	UpdateProfile(ctx context.Context, id uuid.UUID, fullName, phone string, at time.Time) (domain.User, error)
 	// UpdatePassword stores the new hash, bumps the password version and returns it.
@@ -61,7 +63,8 @@ type TokenVerifier interface {
 // Scope names where a user works, for the web to show.
 type Scope struct {
 	Organization *Named
-	Gym          *Named
+	// Gyms is only filled for an admin.
+	Gyms []Named
 	// Branches is only filled for a receptionist.
 	Branches []BranchRef
 }

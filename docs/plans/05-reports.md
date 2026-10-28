@@ -20,7 +20,7 @@ add an `archtest` exception limited to this module.
 ## Endpoints
 
 `GET /payments?from=&to=&branch_id=&gym_id=&method=&kind=membership|day_pass&q=&page=&page_size=`: payments of the caller's reach
-(owner: organization; admin: its gym; reception: assigned branches), `from`/`to` are Lima dates (default: current month), newest first.
+(owner: organization; admin: its gyms; reception: assigned branches), `from`/`to` are Lima dates (default: current month), newest first.
 ```json
 { "data": [ { "id": "...", "paid_on": "2026-10-27", "receipt_number": "R-000012", "kind": "membership", "amount": "270.00", "method": "cash",
    "member": { "id": "...", "full_name": "..." }, "branch": { "id": "...", "name": "Miraflores" } } ],

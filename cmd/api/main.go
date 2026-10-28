@@ -25,6 +25,10 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers"
+	vouchersstorage "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers/adapters/storage"
+	vouchersapp "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers/app"
+	vouchersdomain "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers/domain"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/config"
@@ -84,7 +88,10 @@ func run() int {
 		Logger:             log,
 		CORSOrigins:        cfg.CORSOrigins,
 		RateLimitPerMinute: cfg.RateLimitPerMinute,
-		BodyLimits:         map[string]int64{"PUT " + httpserver.APIPrefix + "/gyms/:gym_id/logo": app.MaxLogoBytes + 1},
+		BodyLimits: map[string]int64{
+			"PUT " + httpserver.APIPrefix + "/gyms/:gym_id/logo":      app.MaxLogoBytes + 1,
+			"POST " + httpserver.APIPrefix + "/receipts/:id/vouchers": vouchersdomain.MaxBytes + 1,
+		},
 	})
 	if err != nil {
 		log.Error("router", "error", err)
@@ -94,10 +101,13 @@ func run() int {
 
 	// Without the R2 variables (development) the logo endpoints answer that storage is unavailable.
 	var logos app.LogoStore
+	var voucherStore vouchersapp.Store
 	if cfg.Storage.Enabled() {
-		logos = accountslogos.New(objectstore.New(objectstore.Config(cfg.Storage)))
+		client := objectstore.New(objectstore.Config(cfg.Storage))
+		logos = accountslogos.New(client)
+		voucherStore = vouchersstorage.New(client)
 	} else {
-		log.Warn("R2 is not configured: gym logos cannot be uploaded")
+		log.Warn("R2 is not configured: gym logos and payment vouchers cannot be uploaded")
 	}
 
 	accountsModule, err := accounts.New(accounts.Deps{
@@ -135,6 +145,7 @@ func run() int {
 	members.New(members.Deps{Pool: pool, Clock: clock.System{}, LogoURL: logoURL}).Routes(protected, scope)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
 	// The CSV download is heavy: it shares the login's tighter per-IP limit.
+	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected, scope)
 	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope, middleware.NewRateLimiter(cfg.LoginRateLimitPerMinute).Middleware())
 
 	if err := httpserver.Serve(ctx, router, cfg.Port, log); err != nil {

@@ -25,7 +25,8 @@ const (
 	RoleSuperadmin Role = "superadmin"
 	// RoleOwner sees and manages every gym and branch of its organization.
 	RoleOwner Role = "owner"
-	// RoleAdmin manages one gym (Principal.GymID): its branches, reception users and prices.
+	// RoleAdmin manages the gyms the owner assigned (Principal.GymIDs): their branches,
+	// reception users and prices. It never creates other admins.
 	RoleAdmin Role = "admin"
 	// RoleReceptionist works the branches listed in Principal.BranchIDs.
 	RoleReceptionist Role = "receptionist"
@@ -38,8 +39,8 @@ type Principal struct {
 	// OrganizationID is uuid.Nil for the superadmin, who belongs to no client.
 	OrganizationID uuid.UUID
 	Role           Role
-	// GymID is the gym an admin manages; uuid.Nil for the other roles.
-	GymID uuid.UUID
+	// GymIDs are the gyms an admin manages; empty for the other roles.
+	GymIDs []uuid.UUID
 	// BranchIDs are the branches a receptionist works in; empty for the other roles.
 	BranchIDs          []uuid.UUID
 	MustChangePassword bool
@@ -55,7 +56,7 @@ type BranchRef struct {
 func (p Principal) CanOperate() bool { return p.Role != RoleSuperadmin }
 
 // CanAccessBranch says whether the user may work in a branch. Owners reach every
-// branch of their organization, admins those of their gym, reception the assigned
+// branch of their organization, admins those of their gyms, reception the assigned
 // ones. Isolation between organizations is enforced separately: every query
 // filters by organization_id.
 func (p Principal) CanAccessBranch(branch BranchRef) bool {
@@ -63,7 +64,7 @@ func (p Principal) CanAccessBranch(branch BranchRef) bool {
 	case RoleSuperadmin, RoleOwner:
 		return true
 	case RoleAdmin:
-		return branch.GymID == p.GymID
+		return slices.Contains(p.GymIDs, branch.GymID)
 	case RoleReceptionist:
 		return slices.Contains(p.BranchIDs, branch.ID)
 	default:
@@ -77,7 +78,7 @@ func (p Principal) CanManageGym(gymID uuid.UUID) bool {
 	case RoleOwner:
 		return true
 	case RoleAdmin:
-		return p.GymID == gymID
+		return slices.Contains(p.GymIDs, gymID)
 	default:
 		return false
 	}

@@ -12,7 +12,7 @@ func (s *Service) UpdateOwner(ctx context.Context, p auth.Principal, organizatio
 	if err := requirePlatform(p); err != nil {
 		return TeamUser{}, err
 	}
-	if input.Role != nil || input.GymID != nil || input.BranchIDs != nil {
+	if input.Role != nil || input.GymIDs != nil || input.BranchIDs != nil {
 		return TeamUser{}, domain.ErrRoleNotAssignable
 	}
 	var result TeamUser

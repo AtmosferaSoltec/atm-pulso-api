@@ -12,7 +12,7 @@ files `000NN_<module>_<what>.sql` with `Up` and `Down`.
 Every business table carries `organization_id`. To let the **database itself** refuse cross-tenant
 links, parent tables expose `UNIQUE (id, organization_id)` and children use a **composite foreign key**
 `(parent_id, organization_id) REFERENCES parent (id, organization_id)`. The existing example is
-`users (gym_id, organization_id) -> gyms (id, organization_id)`. Follow it for every new link. Tests must
+`user_gyms (gym_id, organization_id) -> gyms (id, organization_id)`. Follow it for every new link. Tests must
 prove that inserting a cross-tenant link fails (see `TestDatabaseEnforcesTenancyAndRoleRules`).
 
 ## Existing (API-01)
@@ -22,8 +22,10 @@ organizations (id, name, contact_document_number, contact_name, contact_email, c
 gyms          (id, organization_id -> organizations, name, display_name, tax_id, brand_color, day_pass_price,
                branch_sharing, created_at, updated_at, UNIQUE (id, organization_id))
 branches      (id, gym_id -> gyms, name, address, created_at, updated_at)
-users         (id, organization_id, gym_id, document_type='dni', document_number UNIQUE, full_name, phone, role,
-               password_hash, password_version, is_active, created_at, updated_at, + role/scope CHECK and composite FK to gyms)
+users         (id, organization_id, document_type='dni', document_number UNIQUE, full_name, phone, role,
+               password_hash, password_version, is_active, created_at, updated_at, + role/scope CHECK)
+user_gyms     (user_id, gym_id, organization_id, PK (user_id, gym_id), composite FKs to users and gyms)
+                                                                -- the gyms an admin manages (migration 00010; at least one is an app rule)
 user_branches (user_id -> users, branch_id -> branches)         -- a receptionist's branches
 ```
 
@@ -101,3 +103,9 @@ day pass customers are personal data (Peru Law 29733): never log them.
 ## API-05 adds
 
 No tables. Aggregate queries over `payments` and `memberships`. Add the indexes the explain plans ask for.
+
+## payment_vouchers (module vouchers)
+Proof of payment files attached to a payment: `id`, `organization_id`, `payment_id` (composite FK to
+`payments(id, organization_id)`, `ON DELETE CASCADE`), `storage_key` (private R2 object), `content_type`
+(png, jpeg, webp or pdf), `size_bytes`, `uploaded_by`, `created_at`. At most five per payment, never for
+cash, immutable. `payments` gets `UNIQUE (id, organization_id)` for that foreign key.
