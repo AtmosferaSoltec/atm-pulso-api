@@ -36,6 +36,12 @@ type GymChanges struct {
 
 type GymRepository interface {
 	UpdateGym(context.Context, uuid.UUID, uuid.UUID, GymChanges) error
+	// GymOrganization returns the organization a gym belongs to (domain.ErrResourceNotFound if none).
+	GymOrganization(ctx context.Context, gymID uuid.UUID) (uuid.UUID, error)
+	// SetLogoKey stores (or clears, with nil) the logo and returns the key it replaced.
+	// LogoKey is the stored logo of a gym, nil when it has none (domain.ErrResourceNotFound if no gym).
+	LogoKey(ctx context.Context, gymID uuid.UUID) (*string, error)
+	SetLogoKey(ctx context.Context, organizationID, gymID uuid.UUID, key *string) (*string, error)
 }
 
 var colorPattern = regexp.MustCompile(`^#[0-9a-f]{6}$`)
@@ -63,8 +69,25 @@ func normalizePrices(prices []MembershipPrice) ([]MembershipPrice, bool) {
 	return append([]MembershipPrice{}, prices...), true
 }
 
+// UpdateGym changes a gym. The identity (display name, colour, logo) is set only by the
+// superadmin, who may change nothing else; owners and admins change everything but the identity.
 func (s *Service) UpdateGym(ctx context.Context, p auth.Principal, id uuid.UUID, input GymChanges) (Gym, error) {
-	if p.Role == auth.RoleSuperadmin || p.Role == auth.RoleReceptionist {
+	identityChange := input.DisplayName.Set || input.BrandColor.Set
+	switch p.Role {
+	case auth.RoleSuperadmin:
+		if input.DayPassPrice.Set || input.BranchSharing.Set || input.MembershipPrices.Set {
+			return Gym{}, domain.ErrForbidden
+		}
+		org, err := s.Gyms.GymOrganization(ctx, id)
+		if err != nil {
+			return Gym{}, err
+		}
+		p.OrganizationID = org
+	case auth.RoleOwner, auth.RoleAdmin:
+		if identityChange {
+			return Gym{}, domain.ErrForbidden
+		}
+	default:
 		return Gym{}, domain.ErrForbidden
 	}
 	catalog, err := s.Catalogs.Catalog(ctx, p.OrganizationID)
@@ -81,7 +104,7 @@ func (s *Service) UpdateGym(ctx context.Context, p auth.Principal, id uuid.UUID,
 	if !found {
 		return Gym{}, domain.ErrResourceNotFound
 	}
-	if !p.CanManageGym(id) {
+	if p.Role != auth.RoleSuperadmin && !p.CanManageGym(id) {
 		return Gym{}, domain.ErrScopeNotAllowed
 	}
 	if input.DisplayName.Set && input.DisplayName.Value != nil {

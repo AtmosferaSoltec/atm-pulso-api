@@ -16,10 +16,9 @@ it owns *gyms*, and each gym has *branches*. Members, payments, access control a
 
 Business rules that shape the code:
 
-- **Pulso is free within limits**: 1 gym and up to 1 branch per gym per client. Anything
-  beyond is agreed with Atmósfera, which creates it (and charges for it). Owners and admins
-  can never create gyms or branches themselves. The limits live in one place, in code, when
-  that module is built.
+- **There are no plans or limits in the product.** Only the superadmin (Atmósfera) creates
+  gyms and branches, and only the superadmin sets a gym's identity (display name, colour, logo).
+  Owners and admins can never do either. Anything commercial is handled outside the system.
 - The member directory is shared by every gym and branch of the same owner. Access between
   branches is a per-gym rule set by that gym's administrator.
 - Only an owner creates admins; an admin creates reception staff.

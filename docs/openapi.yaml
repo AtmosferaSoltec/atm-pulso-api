@@ -126,7 +126,7 @@ paths:
   /clients:
     get:
       tags: [accounts]
-      summary: List clients with gyms and plan state.
+      summary: List clients with their gyms.
       description: Superadmin only; organization inspection headers are ignored.
       security: [{ bearer: [] }]
       parameters:
@@ -191,7 +191,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "409":
-          description: PLAN_LIMIT_EXCEEDED (extra_gyms and extra_branches in details), USER_DOCUMENT_TAKEN, or CONFLICT.
+          description: USER_DOCUMENT_TAKEN or CONFLICT.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -226,7 +226,7 @@ paths:
   /clients/{client_id}/gyms:
     post:
       tags: [accounts]
-      summary: Add an agreed gym to a client.
+      summary: Add a gym to a client.
       description: Superadmin only; organization inspection headers are ignored.
       security: [{ bearer: [] }]
       parameters:
@@ -259,14 +259,14 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "409":
-          description: PLAN_LIMIT_EXCEEDED (extra_gyms and extra_branches in details), USER_DOCUMENT_TAKEN, or CONFLICT.
+          description: USER_DOCUMENT_TAKEN or CONFLICT.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
   /gyms/{gym_id}/branches:
     post:
       tags: [accounts]
-      summary: Add an agreed branch to a gym.
+      summary: Add a branch to a gym.
       description: Superadmin only; organization inspection headers are ignored.
       security: [{ bearer: [] }]
       parameters:
@@ -299,7 +299,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "409":
-          description: PLAN_LIMIT_EXCEEDED (extra_gyms and extra_branches in details), USER_DOCUMENT_TAKEN, or CONFLICT.
+          description: USER_DOCUMENT_TAKEN or CONFLICT.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -542,8 +542,12 @@ paths:
   /gyms/{gym_id}:
     patch:
       tags: [accounts]
-      summary: Change a gym's identity, day pass price or branch sharing.
-      description: Owner of the organization or admin of that gym. Send only the fields to change; null for display_name or day_pass_price restores the default.
+      summary: Change a gym's identity (superadmin) or its day pass price, branch sharing and membership prices (owner or admin).
+      description: |
+        Send only the fields to change; null for display_name or day_pass_price restores the default.
+        The identity (`display_name`, `brand_color`; the logo has its own endpoint) is set only by the superadmin,
+        who may change nothing else. The owner of the organization or the admin of that gym change the rest,
+        and get 403 FORBIDDEN if they send an identity field.
       security: [{ bearer: [] }]
       parameters:
         - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -571,6 +575,115 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "404":
           description: NOT_FOUND (also for resources of another organization).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /gyms/{gym_id}/logo:
+    get:
+      tags: [accounts]
+      summary: Download a gym's logo.
+      description: |
+        Public (no token: an `<img>` cannot send one). The logo is branding, not private data. The bucket is private; the API
+        reads the file and streams it. `v` is the version from `logo_url`: when it is the current one the answer is cacheable
+        for good (`immutable`), otherwise it is `no-cache`.
+      security: []
+      parameters:
+        - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: v, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: The image.
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        "404":
+          description: NOT_FOUND (no such gym, or it has no logo).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: STORAGE_UNAVAILABLE.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    put:
+      tags: [accounts]
+      summary: Set a gym's logo.
+      description: |
+        Superadmin only. The body is the image itself (not JSON): PNG, JPEG or WebP, at most 512 KB. The type is
+        checked by the file's content, never by its name or the declared Content-Type. The previous logo is deleted.
+        Answers 503 STORAGE_UNAVAILABLE when no object store is configured.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          image/png: { schema: { type: string, format: binary } }
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Gym" }
+        "400":
+          description: VALIDATION_FAILED with field `logo` and code LOGO_TYPE_INVALID or LOGO_SIZE_INVALID.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: FORBIDDEN (not the superadmin).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: NOT_FOUND.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: STORAGE_UNAVAILABLE.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [accounts]
+      summary: Remove a gym's logo.
+      description: Superadmin only. The file is deleted from the object store.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Gym" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: FORBIDDEN (not the superadmin).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: NOT_FOUND.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: STORAGE_UNAVAILABLE.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1115,7 +1228,7 @@ components:
         client_users: { type: integer }
     Client:
       type: object
-      required: [id, name, owner, gyms, plan]
+      required: [id, name, owner, gyms]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -1130,19 +1243,11 @@ components:
         gyms:
           type: array
           items: { $ref: "#/components/schemas/Gym" }
-        plan:
-          type: object
-          required: [state, extra_gyms, extra_branches]
-          properties:
-            state: { type: string, enum: [free, extras] }
-            extra_gyms: { type: integer }
-            extra_branches: { type: integer }
     NewClient:
       type: object
       required: [owner, gyms]
       properties:
         id: { type: string, format: uuid }
-        agreed_extra: { type: boolean, default: false }
         owner:
           type: object
           required: [document_number, first_names, last_names, email, phone]
@@ -1163,7 +1268,6 @@ components:
         id: { type: string, format: uuid }
         name: { type: string, minLength: 1, maxLength: 120 }
         tax_id: { type: string, pattern: '^[0-9]{11}$' }
-        agreed_extra: { type: boolean, default: false }
         branches:
           type: array
           minItems: 1
@@ -1175,7 +1279,6 @@ components:
         id: { type: string, format: uuid }
         name: { type: string, minLength: 1, maxLength: 120 }
         address: { type: string }
-        agreed_extra: { type: boolean, default: false }
     CatalogBranch:
       type: object
       required: [id, name, address, accessible]
@@ -1194,13 +1297,14 @@ components:
           items: { $ref: "#/components/schemas/Gym" }
     Gym:
       type: object
-      required: [id, name, display_name, tax_id, brand_color, day_pass_price, day_pass_price_is_default, branch_sharing, membership_prices, branches]
+      required: [id, name, display_name, tax_id, brand_color, logo_url, day_pass_price, day_pass_price_is_default, branch_sharing, membership_prices, branches]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         display_name: { type: [string, "null"] }
         tax_id: { type: [string, "null"] }
         brand_color: { type: string, pattern: '^#[0-9a-f]{6}$' }
+        logo_url: { type: [string, "null"], example: "/gyms/0190…/logo?v=0190…", description: Address of the logo relative to the API prefix (prepend the API base URL); changes with every upload. Null when the gym has none. }
         day_pass_price: { type: string, example: "15.00" }
         day_pass_price_is_default: { type: boolean }
         branch_sharing: { type: boolean }
@@ -1405,11 +1509,12 @@ components:
         issued_on: { type: string, format: date }
         gym:
           type: object
-          required: [name, tax_id, brand_color]
+          required: [name, tax_id, brand_color, logo_url]
           properties:
             name: { type: string, description: The display name when the gym has one. }
             tax_id: { type: [string, "null"] }
             brand_color: { type: string }
+            logo_url: { type: [string, "null"], description: Address of the logo relative to the API prefix; null when the gym has none. }
         branch:
           type: object
           required: [name, address]

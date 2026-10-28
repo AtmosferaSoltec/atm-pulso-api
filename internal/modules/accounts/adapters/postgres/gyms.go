@@ -3,10 +3,12 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/app"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/domain"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func (r *Repository) UpdateGym(ctx context.Context, org, id uuid.UUID, input app.GymChanges) error {
@@ -32,4 +34,25 @@ func (r *Repository) UpdateGym(ctx context.Context, org, id uuid.UUID, input app
 		return domain.ErrResourceNotFound
 	}
 	return nil
+}
+
+func (r *Repository) SetLogoKey(ctx context.Context, org, gymID uuid.UUID, key *string) (*string, error) {
+	// The subselect reads the key before the update, which RETURNING would not.
+	var previous *string
+	err := r.pool.QueryRow(ctx, `UPDATE gyms g SET logo_key=$3,updated_at=now()
+ FROM (SELECT id,logo_key FROM gyms WHERE id=$1 AND organization_id=$2 FOR UPDATE) old
+ WHERE g.id=old.id RETURNING old.logo_key`, gymID, org, key).Scan(&previous)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrResourceNotFound
+	}
+	return previous, err
+}
+
+func (r *Repository) LogoKey(ctx context.Context, gymID uuid.UUID) (*string, error) {
+	var key *string
+	err := r.pool.QueryRow(ctx, `SELECT logo_key FROM gyms WHERE id=$1`, gymID).Scan(&key)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrResourceNotFound
+	}
+	return key, err
 }

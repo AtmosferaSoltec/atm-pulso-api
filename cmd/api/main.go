@@ -20,6 +20,8 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/identity"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/access"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
+	accountslogos "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/adapters/logos"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/app"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports"
@@ -31,6 +33,8 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/httpserver"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/logger"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/middleware"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/objectstore"
+	"github.com/google/uuid"
 )
 
 // identityTimeout bounds each call to atm-identity-api.
@@ -87,11 +91,20 @@ func run() int {
 	}
 	health.Register(api, pool)
 
+	// Without the R2 variables (development) the logo endpoints answer that storage is unavailable.
+	var logos app.LogoStore
+	if cfg.Storage.Enabled() {
+		logos = accountslogos.New(objectstore.New(objectstore.Config(cfg.Storage)))
+	} else {
+		log.Warn("R2 is not configured: gym logos cannot be uploaded")
+	}
+
 	accountsModule, err := accounts.New(accounts.Deps{
 		Pool:           pool,
 		Clock:          clock.System{},
 		JWTSecret:      cfg.JWTAccessSecret,
 		AccessTokenTTL: cfg.AccessTokenTTL,
+		Logos:          logos,
 	})
 	if err != nil {
 		log.Error("modules", "error", err)
@@ -111,9 +124,14 @@ func run() int {
 	limited := api.Group("", middleware.NewRateLimiter(cfg.LoginRateLimitPerMinute).Middleware())
 	protected := api.Group("", auth.Require(accountsModule.Authenticator()))
 	accountsModule.Routes(limited, protected)
+	accountsModule.PublicRoutes(api)
 	documentsModule.Routes(protected)
 	scope := auth.OrganizationScope(accountsModule.Organizations())
-	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
+	var logoURL func(uuid.UUID, string) string
+	if logos != nil {
+		logoURL = accountsModule.LogoURL
+	}
+	members.New(members.Deps{Pool: pool, Clock: clock.System{}, LogoURL: logoURL}).Routes(protected, scope)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
 	// The CSV download is heavy: it shares the login's tighter per-IP limit.
 	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope, middleware.NewRateLimiter(cfg.LoginRateLimitPerMinute).Middleware())

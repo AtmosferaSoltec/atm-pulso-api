@@ -27,6 +27,9 @@ type Gym struct {
 	DayPassPrice          string    `json:"day_pass_price"`
 	DayPassPriceIsDefault bool      `json:"day_pass_price_is_default"`
 	BranchSharing         bool      `json:"branch_sharing"`
+	// LogoKey is where the logo lives in the object store; clients get LogoURL instead.
+	LogoKey *string `json:"-"`
+	LogoURL *string `json:"logo_url"`
 	// MembershipPrices is the gym's base price per duration, ordered by months.
 	MembershipPrices []MembershipPrice `json:"membership_prices"`
 	Branches         []Branch          `json:"branches"`
@@ -57,6 +60,7 @@ func (s *Service) Catalog(ctx context.Context, principal auth.Principal) (Catalo
 	}
 	for gi := range catalog.Gyms {
 		gym := &catalog.Gyms[gi]
+		gym.LogoURL = s.logoURL(gym.ID, gym.LogoKey)
 		for bi := range gym.Branches {
 			branch := &gym.Branches[bi]
 			branch.Accessible = principal.CanAccessBranch(auth.BranchRef{ID: branch.ID, GymID: gym.ID})

@@ -22,7 +22,7 @@ func (h harness) clientInput(t *testing.T) app.NewClient {
 	})
 	return app.NewClient{ID: id, Owner: app.NewOwner{DocumentNumber: uniqueDocument(), FirstNames: "Test", LastNames: "Owner", Email: "test@example.com", Phone: "999111222"}, Gyms: []app.NewGym{{Name: "Test Gym", TaxID: "20123456789", Branches: []app.NewBranch{{Name: "Main"}}}}}
 }
-func TestCreateClientAndExtraAgreements(t *testing.T) {
+func TestCreateClient(t *testing.T) {
 	h := newHarness(t)
 	token := h.token(t, h.newSuperadmin(t), demoPassword)
 	input := h.clientInput(t)
@@ -38,17 +38,11 @@ func TestCreateClientAndExtraAgreements(t *testing.T) {
 	owner, ok := login.data()["user"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, true, owner["must_change_password"])
-	extra := h.clientInput(t)
-	extra.Gyms = append(extra.Gyms, app.NewGym{Name: "Second Gym", Branches: []app.NewBranch{{Name: "Branch 1"}, {Name: "Branch 2"}}})
-	denied := h.call(t, http.MethodPost, "/clients", token, extra)
-	require.Equal(t, http.StatusConflict, denied.status)
-	assert.Equal(t, "PLAN_LIMIT_EXCEEDED", denied.errorCode())
-	extra.AgreedExtra = true
-	accepted := h.call(t, http.MethodPost, "/clients", token, extra)
+	// The superadmin sets no limit: any number of gyms and branches is created directly.
+	many := h.clientInput(t)
+	many.Gyms = append(many.Gyms, app.NewGym{Name: "Second Gym", Branches: []app.NewBranch{{Name: "Branch 1"}, {Name: "Branch 2"}}})
+	accepted := h.call(t, http.MethodPost, "/clients", token, many)
 	require.Equal(t, http.StatusCreated, accepted.status, accepted.body)
-	var agreements int
-	require.NoError(t, h.pool.QueryRow(context.Background(), `SELECT count(*) FROM plan_agreements WHERE organization_id=$1`, extra.ID).Scan(&agreements))
-	assert.Equal(t, 2, agreements)
 	duplicate := h.clientInput(t)
 	duplicate.Owner.DocumentNumber = input.Owner.DocumentNumber
 	assert.Equal(t, "USER_DOCUMENT_TAKEN", h.call(t, http.MethodPost, "/clients", token, duplicate).errorCode())
@@ -60,7 +54,6 @@ func TestClientCreationIsAtomic(t *testing.T) {
 	h := newHarness(t)
 	token := h.token(t, h.newSuperadmin(t), demoPassword)
 	input := h.clientInput(t)
-	input.AgreedExtra = true
 	input.Gyms[0].ID = uuid.New()
 	second := input.Gyms[0]
 	input.Gyms = append(input.Gyms, second)
@@ -106,15 +99,11 @@ func TestAddGymsAndBranches(t *testing.T) {
 	tn := h.newTenant(t)
 	gym := app.NewGym{ID: uuid.New(), Name: "Extra", Branches: []app.NewBranch{{Name: "New"}}}
 	path := "/clients/" + tn.OrganizationID.String() + "/gyms"
-	assert.Equal(t, "PLAN_LIMIT_EXCEEDED", h.call(t, http.MethodPost, path, token, gym).errorCode())
-	gym.AgreedExtra = true
 	created := h.call(t, http.MethodPost, path, token, gym)
 	require.Equal(t, http.StatusCreated, created.status, created.body)
 	assert.Equal(t, created.data(), h.call(t, http.MethodPost, path, token, gym).data())
 	branch := app.NewBranch{ID: uuid.New(), Name: "Extra branch"}
 	path = "/gyms/" + gym.ID.String() + "/branches"
-	assert.Equal(t, "PLAN_LIMIT_EXCEEDED", h.call(t, http.MethodPost, path, token, branch).errorCode())
-	branch.AgreedExtra = true
 	created = h.call(t, http.MethodPost, path, token, branch)
 	require.Equal(t, http.StatusCreated, created.status, created.body)
 	// Accessibility is calculated by the catalog; platform create responses are repeatable too.

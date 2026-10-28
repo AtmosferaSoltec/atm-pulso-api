@@ -44,6 +44,7 @@ type Config struct {
 	RateLimitPerMinute      int
 	LoginRateLimitPerMinute int
 	Identity                IdentityConfig
+	Storage                 StorageConfig
 }
 
 // IdentityConfig is how to reach atm-identity-api, which resolves DNI and RUC.
@@ -51,6 +52,20 @@ type Config struct {
 type IdentityConfig struct {
 	URL    string
 	APIKey string
+}
+
+// StorageConfig is the Cloudflare R2 bucket that holds the gyms' logos. Without it
+// (development only) the logo endpoints answer that storage is unavailable.
+type StorageConfig struct {
+	Endpoint        string
+	Bucket          string
+	AccessKeyID     string
+	SecretAccessKey string
+}
+
+// Enabled says whether every storage variable is set.
+func (s StorageConfig) Enabled() bool {
+	return s.Endpoint != "" && s.Bucket != "" && s.AccessKeyID != "" && s.SecretAccessKey != ""
 }
 
 // IsProduction says whether the app runs on the server.
@@ -78,10 +93,17 @@ func LoadFrom(lookup func(string) string) (Config, error) {
 			URL:    r.optionalOr("IDENTITY_API_URL", defaultIdentityURL),
 			APIKey: r.optional("IDENTITY_API_KEY"),
 		},
+		Storage: StorageConfig{
+			Endpoint:        r.httpsURL("R2_ENDPOINT"),
+			Bucket:          r.optional("R2_BUCKET"),
+			AccessKeyID:     r.optional("R2_ACCESS_KEY_ID"),
+			SecretAccessKey: r.optional("R2_SECRET_ACCESS_KEY"),
+		},
 	}
 
 	if cfg.IsProduction() {
 		r.requireInProduction("IDENTITY_API_KEY", cfg.Identity.APIKey != "")
+		r.requireInProduction("R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY", cfg.Storage.Enabled())
 	}
 
 	if len(r.problems) > 0 {
@@ -158,6 +180,19 @@ func (r *reader) databaseURL(name string) string {
 	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Host == "" {
 		// The value is never printed: it carries the password.
 		r.fail("%s must be a postgresql:// URL", name)
+	}
+	return value
+}
+
+// httpsURL is optional, but when present it must be an absolute https URL (a trailing
+// slash is dropped). The value is not printed: it may carry an account identifier.
+func (r *reader) httpsURL(name string) string {
+	value := strings.TrimRight(r.optional(name), "/")
+	if value == "" {
+		return value
+	}
+	if parsed, err := url.Parse(value); err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		r.fail("%s must be an https:// URL", name)
 	}
 	return value
 }

@@ -24,6 +24,8 @@ type Deps struct {
 	Issuer   TokenIssuer
 	Verifier TokenVerifier
 	Clock    clock.Clock
+	// Logos stores the gyms' logos; nil when no object store is configured.
+	Logos LogoStore
 }
 
 // Service is the accounts use cases: sign in, authenticate a request, see and edit

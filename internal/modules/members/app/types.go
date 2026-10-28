@@ -118,9 +118,14 @@ type ReceiptDetail struct {
 	Kind     string    `json:"kind"`
 	IssuedOn string    `json:"issued_on"`
 	Gym      struct {
-		Name       string  `json:"name"`
-		TaxID      *string `json:"tax_id"`
-		BrandColor string  `json:"brand_color"`
+		// ID is not sent: it builds the logo address.
+		ID         uuid.UUID `json:"-"`
+		Name       string    `json:"name"`
+		TaxID      *string   `json:"tax_id"`
+		BrandColor string    `json:"brand_color"`
+		// LogoKey is where the logo lives in the object store; clients get LogoURL instead.
+		LogoKey *string `json:"-"`
+		LogoURL *string `json:"logo_url"`
 	} `json:"gym"`
 	Branch struct {
 		Name    string  `json:"name"`

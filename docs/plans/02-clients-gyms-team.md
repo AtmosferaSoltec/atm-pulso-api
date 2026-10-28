@@ -2,6 +2,8 @@
 
 **Depends on:** API-01 (done). **Unlocks:** WEB-02, API-03. **Rules:** business-rules §2, §3, §4, §5, §14, §15, §16.
 
+> **Superseded:** the free plan, `agreed_extra`, `PLAN_LIMIT_EXCEEDED`, the `plan` field and `plan_agreements` described below were removed (migration 00009). Gyms and branches have no limit; only the superadmin creates them.
+
 ## Goal
 
 Everything needed to create and manage who is who: the superadmin creates clients (an owner plus its gyms and

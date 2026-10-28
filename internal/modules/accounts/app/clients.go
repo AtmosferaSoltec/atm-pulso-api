@@ -17,7 +17,6 @@ type Client struct {
 	Name  string      `json:"name"`
 	Owner ClientOwner `json:"owner"`
 	Gyms  []Gym       `json:"gyms"`
-	Plan  PlanState   `json:"plan"`
 }
 
 type ClientOwner struct {
@@ -25,12 +24,6 @@ type ClientOwner struct {
 	DocumentNumber string    `json:"document_number"`
 	FullName       string    `json:"full_name"`
 	IsActive       bool      `json:"is_active"`
-}
-
-type PlanState struct {
-	State         string `json:"state"`
-	ExtraGyms     int    `json:"extra_gyms"`
-	ExtraBranches int    `json:"extra_branches"`
 }
 
 type ClientSummary struct {
@@ -49,33 +42,30 @@ type NewOwner struct {
 }
 
 type NewBranch struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Address     string    `json:"address"`
-	AgreedExtra bool      `json:"agreed_extra"`
+	ID      uuid.UUID `json:"id"`
+	Name    string    `json:"name"`
+	Address string    `json:"address"`
 }
 
 type NewGym struct {
-	ID          uuid.UUID   `json:"id"`
-	Name        string      `json:"name"`
-	TaxID       string      `json:"tax_id"`
-	Branches    []NewBranch `json:"branches"`
-	AgreedExtra bool        `json:"agreed_extra"`
+	ID       uuid.UUID   `json:"id"`
+	Name     string      `json:"name"`
+	TaxID    string      `json:"tax_id"`
+	Branches []NewBranch `json:"branches"`
 }
 
 type NewClient struct {
-	ID          uuid.UUID `json:"id"`
-	Owner       NewOwner  `json:"owner"`
-	Gyms        []NewGym  `json:"gyms"`
-	AgreedExtra bool      `json:"agreed_extra"`
+	ID    uuid.UUID `json:"id"`
+	Owner NewOwner  `json:"owner"`
+	Gyms  []NewGym  `json:"gyms"`
 }
 
 // ClientTransaction runs all writes and plan checks under one organization lock.
 type ClientTransaction interface {
 	FindClient(context.Context, uuid.UUID) (Client, error)
-	InsertClient(context.Context, NewClient, string, uuid.UUID) error
-	AddGym(context.Context, uuid.UUID, NewGym, uuid.UUID, bool) error
-	AddBranch(context.Context, uuid.UUID, uuid.UUID, NewBranch, uuid.UUID, bool) error
+	InsertClient(context.Context, NewClient, string) error
+	AddGym(context.Context, uuid.UUID, NewGym) error
+	AddBranch(context.Context, uuid.UUID, uuid.UUID, NewBranch) error
 }
 
 type ClientRepository interface {
@@ -83,19 +73,6 @@ type ClientRepository interface {
 	ListClients(context.Context, string, int, int) ([]Client, int64, error)
 	ClientSummary(context.Context) (ClientSummary, error)
 	GymOrganization(context.Context, uuid.UUID) (uuid.UUID, error)
-}
-
-func planState(gyms []Gym) PlanState {
-	counts := make([]int, len(gyms))
-	for i, gym := range gyms {
-		counts[i] = len(gym.Branches)
-	}
-	extraGyms, extraBranches := domain.Extras(counts)
-	state := "free"
-	if extraGyms+extraBranches > 0 {
-		state = "extras"
-	}
-	return PlanState{State: state, ExtraGyms: extraGyms, ExtraBranches: extraBranches}
 }
 
 func requirePlatform(principal auth.Principal) error {
@@ -110,9 +87,6 @@ func (s *Service) ListClients(ctx context.Context, p auth.Principal, search stri
 		return nil, 0, err
 	}
 	clients, total, err := s.Clients.ListClients(ctx, strings.TrimSpace(search), page, size)
-	for i := range clients {
-		clients[i].Plan = planState(clients[i].Gyms)
-	}
 	return clients, total, err
 }
 
@@ -143,25 +117,16 @@ func (s *Service) CreateClient(ctx context.Context, p auth.Principal, input NewC
 		if err != domain.ErrResourceNotFound {
 			return err
 		}
-		counts := make([]int, len(input.Gyms))
-		for i, gym := range input.Gyms {
-			counts[i] = len(gym.Branches)
-		}
-		extraGyms, extraBranches := domain.Extras(counts)
-		if extraGyms+extraBranches > 0 && !input.AgreedExtra {
-			return &domain.PlanLimitError{ExtraGyms: extraGyms, ExtraBranches: extraBranches}
-		}
 		hash, err := s.Hasher.Hash(input.Owner.DocumentNumber)
 		if err != nil {
 			return err
 		}
-		if err := tx.InsertClient(ctx, input, hash, p.UserID); err != nil {
+		if err := tx.InsertClient(ctx, input, hash); err != nil {
 			return err
 		}
 		result, err = tx.FindClient(ctx, input.ID)
 		return err
 	})
-	result.Plan = planState(result.Gyms)
 	return result, err
 }
 
@@ -187,12 +152,7 @@ func (s *Service) AddGym(ctx context.Context, p auth.Principal, clientID uuid.UU
 				return nil
 			}
 		}
-		extra := len(client.Gyms) >= domain.FreePlan.MaxGyms
-		extraBranches := max(0, len(input.Branches)-domain.FreePlan.MaxBranchesPerGym)
-		if (extra || extraBranches > 0) && !input.AgreedExtra {
-			return &domain.PlanLimitError{ExtraGyms: max(0, len(client.Gyms)+1-domain.FreePlan.MaxGyms), ExtraBranches: extraBranches}
-		}
-		if err := tx.AddGym(ctx, clientID, input, p.UserID, extra); err != nil {
+		if err := tx.AddGym(ctx, clientID, input); err != nil {
 			return err
 		}
 		client, err = tx.FindClient(ctx, clientID)
@@ -240,11 +200,7 @@ func (s *Service) AddBranch(ctx context.Context, p auth.Principal, gymID uuid.UU
 					return nil
 				}
 			}
-			extra := len(gym.Branches) >= domain.FreePlan.MaxBranchesPerGym
-			if extra && !input.AgreedExtra {
-				return &domain.PlanLimitError{ExtraBranches: len(gym.Branches) + 1 - domain.FreePlan.MaxBranchesPerGym}
-			}
-			if err := tx.AddBranch(ctx, org, gymID, input, p.UserID, extra); err != nil {
+			if err := tx.AddBranch(ctx, org, gymID, input); err != nil {
 				return err
 			}
 			result = Branch{ID: input.ID, Name: strings.TrimSpace(input.Name), Accessible: true}

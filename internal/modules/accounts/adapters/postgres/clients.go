@@ -63,7 +63,7 @@ func (t *clientTransaction) FindClient(ctx context.Context, id uuid.UUID) (app.C
 	return readClient(ctx, t.transaction, id)
 }
 
-func (t *clientTransaction) InsertClient(ctx context.Context, input app.NewClient, hash string, actor uuid.UUID) error {
+func (t *clientTransaction) InsertClient(ctx context.Context, input app.NewClient, hash string) error {
 	name := domain.NormalizeFullName(input.Owner.FirstNames + " " + input.Owner.LastNames)
 	_, err := t.transaction.Exec(ctx, `INSERT INTO organizations(id,name,contact_document_number,contact_name,contact_email,contact_phone) VALUES($1,$2,$3,$2,$4,$5)`, input.ID, name, input.Owner.DocumentNumber, input.Owner.Email, input.Owner.Phone)
 	if err != nil {
@@ -73,56 +73,39 @@ func (t *clientTransaction) InsertClient(ctx context.Context, input app.NewClien
 	if err != nil {
 		return err
 	}
-	for i, gym := range input.Gyms {
+	for _, gym := range input.Gyms {
 		if gym.ID == uuid.Nil {
 			gym.ID = ids.New()
 		}
-		if err := t.AddGym(ctx, input.ID, gym, actor, i >= domain.FreePlan.MaxGyms); err != nil {
+		if err := t.AddGym(ctx, input.ID, gym); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (t *clientTransaction) AddGym(ctx context.Context, org uuid.UUID, input app.NewGym, actor uuid.UUID, extra bool) error {
+func (t *clientTransaction) AddGym(ctx context.Context, org uuid.UUID, input app.NewGym) error {
 	_, err := t.transaction.Exec(ctx, `INSERT INTO gyms(id,organization_id,name,tax_id)VALUES($1,$2,$3,NULLIF($4,''))`, input.ID, org, strings.TrimSpace(input.Name), input.TaxID)
 	if err != nil {
 		return err
 	}
-	if extra {
-		if err := t.agreement(ctx, org, "gym", input.ID, uuid.Nil, actor); err != nil {
-			return err
-		}
-	}
-	for i, branch := range input.Branches {
+	for _, branch := range input.Branches {
 		if branch.ID == uuid.Nil {
 			branch.ID = ids.New()
 		}
-		if err := t.AddBranch(ctx, org, input.ID, branch, actor, i >= domain.FreePlan.MaxBranchesPerGym); err != nil {
+		if err := t.AddBranch(ctx, org, input.ID, branch); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (t *clientTransaction) AddBranch(ctx context.Context, org, gym uuid.UUID, input app.NewBranch, actor uuid.UUID, extra bool) error {
+func (t *clientTransaction) AddBranch(ctx context.Context, org, gym uuid.UUID, input app.NewBranch) error {
 	_, err := t.transaction.Exec(ctx, `INSERT INTO branches(id,organization_id,gym_id,name,address)VALUES($1,$2,$3,$4,NULLIF($5,''))`, input.ID, org, gym, strings.TrimSpace(input.Name), strings.TrimSpace(input.Address))
 	if err != nil {
 		return err
 	}
-	if extra {
-		return t.agreement(ctx, org, "branch", gym, input.ID, actor)
-	}
 	return nil
-}
-
-func (t *clientTransaction) agreement(ctx context.Context, org uuid.UUID, kind string, gym, branch, actor uuid.UUID) error {
-	var branchID *uuid.UUID
-	if branch != uuid.Nil {
-		branchID = &branch
-	}
-	_, err := t.transaction.Exec(ctx, `INSERT INTO plan_agreements(id,organization_id,kind,gym_id,branch_id,agreed_by)VALUES($1,$2,$3,$4,$5,$6)`, ids.New(), org, kind, gym, branchID, actor)
-	return err
 }
 
 func (r *Repository) GymOrganization(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {

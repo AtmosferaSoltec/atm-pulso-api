@@ -41,9 +41,7 @@ user_branches (user_id -> users, branch_id -> branches)         -- a receptionis
   Every later table links to branches with `(branch_id, organization_id)`.
 - **`user_branches.organization_id`** with composite FKs to `users` and `branches`, so a receptionist can never
   be linked to a branch of another client.
-- **`plan_agreements`**: `id`, `organization_id`, `kind` (`gym` | `branch`), `gym_id`, `branch_id` (nullable,
-  the thing that went beyond the plan), `agreed_by` (user id of the superadmin), `created_at`. One row per
-  extra created with `agreed_extra: true`.
+- ~~`plan_agreements`~~: dropped by migration 00009 (the product has no plans or limits).
 - **`gym_logos`** *(only if the owner approves Q-LOGO)*: `gym_id` PK, `content_type`, `bytes bytea` (max 512 KB),
   `updated_at`.
 

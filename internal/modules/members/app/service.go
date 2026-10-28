@@ -21,6 +21,8 @@ type Service struct {
 	Repo      Repository
 	Directory Directory
 	Clock     clock.Clock
+	// LogoURL turns a gym's logo key into its public address; nil when there is no object store.
+	LogoURL func(gymID uuid.UUID, key string) string
 }
 
 // EnrollInput is the body of POST /members.
@@ -312,7 +314,15 @@ func (s *Service) Receipts(ctx context.Context, p auth.Principal, memberID uuid.
 
 // Receipt returns the printable data of a receipt.
 func (s *Service) Receipt(ctx context.Context, p auth.Principal, id uuid.UUID) (ReceiptDetail, error) {
-	return s.Repo.Receipt(ctx, p.OrganizationID, id)
+	receipt, err := s.Repo.Receipt(ctx, p.OrganizationID, id)
+	if err != nil {
+		return receipt, err
+	}
+	if receipt.Gym.LogoKey != nil && s.LogoURL != nil {
+		url := s.LogoURL(receipt.Gym.ID, *receipt.Gym.LogoKey)
+		receipt.Gym.LogoURL = &url
+	}
+	return receipt, nil
 }
 
 func toDomain(branches []BranchInfo) []domain.Branch {

@@ -56,16 +56,12 @@ belong to exactly one organization. Everything the user sees is in Spanish; iden
   gym; a receptionist the assigned ones (`auth.Principal.CanAccessBranch`). **Every endpoint that
   takes a `branch_id` checks it with that method.**
 
-## 4. The free plan and agreed extras  (`config/freePlan.ts`, `features/platform`)
+## 4. Gyms and branches are created only by the superadmin  (`features/platform`)
 
-- Pulso is free within limits: **1 gym and up to 1 branch per gym** per client. Keep both numbers in
-  **one constant** (never literals) because the owner may change them.
+- There are no plans, limits or extras in the product: any number of gyms and branches can exist.
+  Commercial terms are handled by Atmósfera outside the system.
 - Owners and admins **cannot** create gyms or branches. Only the superadmin does.
-- Going beyond the limits is allowed **only with an explicit confirmation** from the superadmin
-  (`agreed_extra: true`), stored with who and when so the extra can be billed. Without it: `409
-  PLAN_LIMIT_EXCEEDED`.
-- "Extra" is computed: extra gyms = max(0, gyms − max_gyms); extra branches = sum over gyms of
-  max(0, branches − max_branches_per_gym).
+- The identity of a gym (display name, colour, logo) is also set **only by the superadmin**.
 
 ## 5. Gyms and rules  (`features/organization`)
 
@@ -215,8 +211,7 @@ the gym's admin or the owner. Logos and image uploads are deferred until all rea
 
 ## 16. Platform panel (superadmin)  (`features/platform`)
 
-- Lists **clients** with: name, gyms (name, RUC) with their branches, the plan state ("Plan gratuito" or
-  "N extras") and whether the client is active; searchable by client, gym or RUC; metrics: clients,
+- Lists **clients** with: name, gyms (name, RUC) with their branches and whether the client is active; searchable by client, gym or RUC; metrics: clients,
   gyms, branches, users of clients.
 - Creates a client: the owner (document, first and last names, email, phone, **DNI as temporary password**) and
   its gyms with branches. **The client's name is the owner's full name.** Adds gyms to a client and

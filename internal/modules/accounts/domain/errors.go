@@ -14,6 +14,8 @@ var (
 	ErrForbidden         = errors.New("forbidden")
 	ErrConflict          = errors.New("conflict")
 	ErrResourceNotFound  = errors.New("resource not found")
+	// ErrStorageUnavailable: no object store is configured (development without R2).
+	ErrStorageUnavailable = errors.New("object storage unavailable")
 	// ErrUserNotFound: no user matches.
 	ErrUserNotFound = errors.New("user not found")
 	// ErrInvalidCredentials is deliberately the same for an unknown DNI, a wrong
@@ -55,11 +57,3 @@ const (
 	CodePasswordTooLong       = "PASSWORD_TOO_LONG"
 	CodePasswordUnchanged     = "PASSWORD_UNCHANGED"
 )
-
-// PlanLimitError reports the proposed resources requiring an extra agreement.
-type PlanLimitError struct {
-	ExtraGyms     int `json:"extra_gyms"`
-	ExtraBranches int `json:"extra_branches"`
-}
-
-func (e *PlanLimitError) Error() string { return "plan limit exceeded" }

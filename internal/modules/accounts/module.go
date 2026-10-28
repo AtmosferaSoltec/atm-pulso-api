@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	accountshttp "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/adapters/http"
@@ -23,6 +24,8 @@ type Deps struct {
 	Clock          clock.Clock
 	JWTSecret      string
 	AccessTokenTTL time.Duration
+	// Logos is the object store of the gyms' logos; nil disables the logo endpoints.
+	Logos app.LogoStore
 }
 
 // Module is the assembled accounts module.
@@ -46,6 +49,7 @@ func New(deps Deps) (*Module, error) {
 		Issuer:   jwt,
 		Verifier: jwt,
 		Clock:    deps.Clock,
+		Logos:    deps.Logos,
 	})
 	if err != nil {
 		return nil, err
@@ -62,6 +66,12 @@ func (m *Module) Routes(limited, protected gin.IRoutes) {
 	m.handler.TeamRoutes(protected, auth.OrganizationScope(m.repository))
 	protected.GET("/catalog", auth.OrganizationScope(m.repository), m.handler.Catalog)
 }
+
+// PublicRoutes mounts the endpoints that need no token: the gym logo, which an <img> loads.
+func (m *Module) PublicRoutes(public gin.IRoutes) { m.handler.PublicRoutes(public) }
+
+// LogoURL is the address of a gym's logo for other modules to put in their answers.
+func (m *Module) LogoURL(gymID uuid.UUID, key string) string { return app.LogoPath(gymID, key) }
 
 // Organizations is what the organization-scope middleware of every module needs.
 func (m *Module) Organizations() auth.Organizations { return m.repository }

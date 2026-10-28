@@ -42,10 +42,17 @@ func NewHandler(service *app.Service, clock clock.Clock) *Handler {
 	return &Handler{service: service, clock: clock}
 }
 
+// PublicRoutes mounts the endpoints that need no token (the gym logo).
+func (h *Handler) PublicRoutes(public gin.IRoutes) {
+	public.GET("/gyms/:gym_id/logo", h.logo)
+}
+
 // Routes mounts the module: login behind the strict per-IP limit, the rest protected.
 func (h *Handler) Routes(limited, protected gin.IRoutes) {
 	limited.POST("/auth/login", h.login)
 	protected.PATCH("/gyms/:gym_id", h.updateGym)
+	protected.PUT("/gyms/:gym_id/logo", h.setLogo)
+	protected.DELETE("/gyms/:gym_id/logo", h.removeLogo)
 	protected.PATCH("/clients/:client_id/owner", h.updateOwner)
 	protected.POST("/clients/:client_id/owner/password", h.resetOwnerPassword)
 	protected.GET("/clients", h.listClients)
@@ -135,10 +142,7 @@ func bind(c *gin.Context, into any) bool {
 func respond(c *gin.Context, err error) {
 	var validation *domain.ValidationError
 	var locked *domain.LockedError
-	var planLimit *domain.PlanLimitError
 	switch {
-	case errors.As(err, &planLimit):
-		apierror.Respond(c, apierror.New(http.StatusConflict, "PLAN_LIMIT_EXCEEDED", "Confirma el acuerdo de los gimnasios o sedes adicionales.").WithDetails(planLimit))
 	case errors.Is(err, domain.ErrCannotModifySelf):
 		apierror.Respond(c, apierror.New(http.StatusForbidden, "CANNOT_MODIFY_SELF", "No puedes modificar tu propia cuenta aquí."))
 	case errors.Is(err, domain.ErrCannotModifyOwner):
@@ -149,6 +153,8 @@ func respond(c *gin.Context, err error) {
 		apierror.Respond(c, apierror.New(http.StatusForbidden, "SCOPE_NOT_ALLOWED", "No puedes administrar este gimnasio o sede."))
 	case errors.Is(err, domain.ErrForeignScope):
 		apierror.Respond(c, apierror.New(http.StatusBadRequest, "SCOPE_NOT_ALLOWED", "El gimnasio o sede no está disponible."))
+	case errors.Is(err, domain.ErrStorageUnavailable):
+		apierror.Respond(c, apierror.New(http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "El almacenamiento de imágenes no está disponible."))
 	case errors.Is(err, domain.ErrForbidden):
 		apierror.Respond(c, apierror.ErrForbidden)
 	case errors.Is(err, domain.ErrConflict):

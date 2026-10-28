@@ -28,7 +28,6 @@ func TestOwnerJourney(t *testing.T) {
 	input := h.clientInput(t)
 	created := h.call(t, http.MethodPost, "/clients", super, input)
 	require.Equal(t, 201, created.status, created.body)
-	assert.Equal(t, "free", created.data()["plan"].(map[string]any)["state"])
 
 	// 2. The owner signs in for the first time, sees its catalog and creates a receptionist.
 	owner := h.firstLogin(t, input.Owner.DocumentNumber, "ClaveDelDueño1")

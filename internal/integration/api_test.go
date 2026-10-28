@@ -45,6 +45,7 @@ const (
 type harness struct {
 	router *gin.Engine
 	pool   *pgxpool.Pool
+	logos  *memoryLogos
 }
 
 func newHarness(t *testing.T) harness {
@@ -57,17 +58,19 @@ func newHarness(t *testing.T) harness {
 
 	health.Register(api, pool)
 
-	accountsModule, err := accounts.New(accounts.Deps{Pool: pool, Clock: clock.System{}, JWTSecret: jwtSecret, AccessTokenTTL: 8 * time.Hour})
+	logos := newMemoryLogos()
+	accountsModule, err := accounts.New(accounts.Deps{Pool: pool, Clock: clock.System{}, JWTSecret: jwtSecret, AccessTokenTTL: 8 * time.Hour, Logos: logos})
 	require.NoError(t, err)
 	limited := api.Group("", middleware.NewRateLimiter(100_000).Middleware())
 	protected := api.Group("", auth.Require(accountsModule.Authenticator()))
 	accountsModule.Routes(limited, protected)
+	accountsModule.PublicRoutes(api)
 	documents.New(identity.Fake{}).Routes(protected)
 	scope := auth.OrganizationScope(accountsModule.Organizations())
 	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
 	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope, middleware.NewRateLimiter(100_000).Middleware())
-	return harness{router: router, pool: pool}
+	return harness{router: router, pool: pool, logos: logos}
 }
 
 type response struct {

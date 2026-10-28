@@ -20,6 +20,6 @@ Web plans live in `../../../atm-pulso-web/docs/plans/`. Work in order; the web s
 - Stateless auth: JWT with `pv`; the user is reloaded on every request; no sessions table.
 - Multi-tenant by `organization_id` with composite foreign keys; foreign resources answer 404.
 - **No seed data and no superadmin creation in the backend.** The first superadmin is inserted by hand with `scripts/first-superadmin`.
-- **Free plan**: 1 gym and 1 branch per gym; the numbers live in one constant. Extras need the superadmin's `agreed_extra`.
+- **No plans or limits in the product.** Only the superadmin creates gyms and branches and sets a gym's identity (name, colour, logo); commercial terms are handled outside the system.
 - Identity lookups use `atm-identity-api`; in development it can be pointed at the deployed instance (read-only lookups), otherwise use `identity.Fake`.
 - Out of scope for now: gym logos (Q-LOGO), billing, notifications, email, password recovery.
