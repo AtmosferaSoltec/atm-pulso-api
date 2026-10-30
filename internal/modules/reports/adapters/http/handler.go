@@ -25,10 +25,10 @@ type Handler struct{ service *app.Service }
 func NewHandler(service *app.Service) *Handler { return &Handler{service: service} }
 
 // Routes mounts the endpoints. exportLimit throttles the heavy CSV like the login.
-func (h *Handler) Routes(protected gin.IRoutes, scope gin.HandlerFunc, exportLimit gin.HandlerFunc) {
-	protected.GET("/payments", scope, h.payments)
-	protected.GET("/payments/export", scope, exportLimit, h.export)
-	protected.GET("/dashboard", scope, h.dashboard)
+func (h *Handler) Routes(protected gin.IRoutes, exportLimit gin.HandlerFunc) {
+	protected.GET("/payments", h.payments)
+	protected.GET("/payments/export", exportLimit, h.export)
+	protected.GET("/dashboard", h.dashboard)
 }
 
 var kinds = map[string]bool{"": true, "membership": true, "day_pass": true}

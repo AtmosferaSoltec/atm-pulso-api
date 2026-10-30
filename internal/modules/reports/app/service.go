@@ -237,7 +237,7 @@ func (s *Service) Payments(ctx context.Context, p auth.Principal, q PaymentQuery
 	return rows, total, &totals, nil
 }
 
-// Export returns every row of the filter for the CSV (owner and admin only).
+// Export returns every row of the filter for the CSV (admin only).
 func (s *Service) Export(ctx context.Context, p auth.Principal, q PaymentQuery) ([]PaymentRow, error) {
 	if p.Role == auth.RoleReceptionist {
 		return nil, ErrForbidden
@@ -257,7 +257,7 @@ func (s *Service) Export(ctx context.Context, p auth.Principal, q PaymentQuery) 
 	return rows, nil
 }
 
-// Dashboard returns the figures of the caller's reach (owner and admin only).
+// Dashboard returns the figures of the caller's reach (admin only).
 func (s *Service) Dashboard(ctx context.Context, p auth.Principal, branchID, gymID *uuid.UUID) (DashboardView, error) {
 	if p.Role == auth.RoleReceptionist {
 		return DashboardView{}, ErrForbidden

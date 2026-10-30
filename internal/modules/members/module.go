@@ -31,7 +31,7 @@ func New(deps Deps) *Module {
 	return &Module{handler: membershttp.NewHandler(service)}
 }
 
-// Routes mounts the module's endpoints behind authentication and the organization scope.
-func (m *Module) Routes(protected gin.IRoutes, scope gin.HandlerFunc) {
-	m.handler.Routes(protected, scope)
+// Routes mounts the module's endpoints behind authentication.
+func (m *Module) Routes(protected gin.IRoutes) {
+	m.handler.Routes(protected)
 }

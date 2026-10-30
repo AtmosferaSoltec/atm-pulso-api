@@ -29,6 +29,6 @@ func New(deps Deps) *Module {
 }
 
 // Routes mounts the endpoints; exportLimit is the stricter per-IP limiter of the heavy download.
-func (m *Module) Routes(protected gin.IRoutes, scope, exportLimit gin.HandlerFunc) {
-	m.handler.Routes(protected, scope, exportLimit)
+func (m *Module) Routes(protected gin.IRoutes, exportLimit gin.HandlerFunc) {
+	m.handler.Routes(protected, exportLimit)
 }

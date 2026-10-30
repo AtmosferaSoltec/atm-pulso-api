@@ -83,9 +83,6 @@ func reach(p auth.Principal, info PaymentInfo) bool {
 
 // Upload stores a voucher for the payment of a receipt. Cash needs none.
 func (s *Service) Upload(ctx context.Context, p auth.Principal, receiptID uuid.UUID, data []byte) (Voucher, error) {
-	if !p.CanOperate() {
-		return Voucher{}, domain.ErrForbidden
-	}
 	info, err := s.Repo.PaymentOfReceipt(ctx, p.OrganizationID, receiptID)
 	if err != nil {
 		return Voucher{}, err

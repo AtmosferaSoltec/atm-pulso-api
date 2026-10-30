@@ -15,7 +15,7 @@ var (
 	ErrReceiptNotFound = errors.New("receipt not found")
 	// ErrVoucherNotFound: the voucher is not in the organization (or out of reach).
 	ErrVoucherNotFound = errors.New("voucher not found")
-	// ErrForbidden: the role cannot do this (the superadmin only consults).
+	// ErrForbidden: the role cannot do this.
 	ErrForbidden = errors.New("forbidden")
 	// ErrLimitReached: the payment already has MaxPerPayment vouchers.
 	ErrLimitReached = errors.New("voucher limit reached")

@@ -197,9 +197,6 @@ func resultOf(e Entry) CheckResult {
 
 // Check decides and logs one access attempt. The decision is made on the server.
 func (s *Service) Check(ctx context.Context, p auth.Principal, in CheckInput) (CheckResult, error) {
-	if !p.CanOperate() {
-		return CheckResult{}, domain.ErrForbidden
-	}
 	branch, err := s.branchFor(ctx, p, in.BranchID)
 	if err != nil {
 		return CheckResult{}, err
@@ -323,9 +320,6 @@ type DayPassInput struct {
 
 // SellDayPass sells a single entry: day pass, receipt D-NNNNNN, payment and an allowed entry.
 func (s *Service) SellDayPass(ctx context.Context, p auth.Principal, in DayPassInput) (DayPassView, bool, error) {
-	if !p.CanOperate() {
-		return DayPassView{}, false, domain.ErrForbidden
-	}
 	var issues []domain.Issue
 	if !receipts.Methods[in.Method] {
 		issues = append(issues, domain.Issue{Field: "method", Code: "METHOD_INVALID"})

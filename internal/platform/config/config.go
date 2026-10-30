@@ -10,7 +10,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Environment is the value of APP_ENV.
@@ -24,13 +23,9 @@ const (
 )
 
 const (
-	// minSecretLength: `openssl rand -base64 48` produces 64 characters.
-	minSecretLength = 32
-	// defaultAccessTokenTTL is one work shift. The token only lives in the web's
-	// memory and there is no refresh token, so this is also how long a login lasts.
-	defaultAccessTokenTTL = 8 * time.Hour
-	maxAccessTokenTTL     = 24 * time.Hour
-	defaultIdentityURL    = "http://identity-api:8080"
+	defaultIdentityURL = "http://identity-api:8080"
+	defaultAuthURL     = "http://auth-api:8080"
+	defaultSystemCode  = "pulso"
 )
 
 // Config is the validated environment.
@@ -38,14 +33,29 @@ type Config struct {
 	Env                     Environment
 	Port                    string
 	DatabaseURL             string
-	JWTAccessSecret         string
-	AccessTokenTTL          time.Duration
 	CORSOrigins             []string
 	RateLimitPerMinute      int
 	LoginRateLimitPerMinute int
+	Auth                    AuthConfig
 	Identity                IdentityConfig
 	Storage                 StorageConfig
 }
+
+// AuthConfig is how to trust and call atm-auth-api, which owns identity and access.
+type AuthConfig struct {
+	// URL is where atm-auth-api answers; its public keys are at URL + /.well-known/jwks.json.
+	URL string
+	// Issuer is the `iss` of its tokens. Required in production.
+	Issuer string
+	// SystemCode is Pulso's code in atm-auth-api.
+	SystemCode string
+	// ClientSecret is the secret of Pulso's service token. Without it (development only)
+	// company names and team management are unavailable.
+	ClientSecret string
+}
+
+// JWKSURL is where the public keys of atm-auth-api are published.
+func (a AuthConfig) JWKSURL() string { return a.URL + "/.well-known/jwks.json" }
 
 // IdentityConfig is how to reach atm-identity-api, which resolves DNI and RUC.
 // Without an API key (development only) a deterministic fake answers instead.
@@ -54,8 +64,8 @@ type IdentityConfig struct {
 	APIKey string
 }
 
-// StorageConfig is the Cloudflare R2 bucket that holds the gyms' logos. Without it
-// (development only) the logo endpoints answer that storage is unavailable.
+// StorageConfig is the Cloudflare R2 bucket that holds the payment vouchers. Without it
+// (development only) the voucher endpoints answer that storage is unavailable.
 type StorageConfig struct {
 	Endpoint        string
 	Bucket          string
@@ -84,11 +94,15 @@ func LoadFrom(lookup func(string) string) (Config, error) {
 		Env:                     r.environment("APP_ENV"),
 		Port:                    r.port("PORT"),
 		DatabaseURL:             r.databaseURL("DATABASE_URL"),
-		JWTAccessSecret:         r.secret("JWT_ACCESS_SECRET"),
-		AccessTokenTTL:          r.accessTokenTTL("ACCESS_TOKEN_TTL_SECONDS"),
 		CORSOrigins:             r.list("CORS_ORIGIN"),
 		RateLimitPerMinute:      r.positiveIntOr("RATE_LIMIT_PER_MINUTE", 120),
 		LoginRateLimitPerMinute: r.positiveIntOr("LOGIN_RATE_LIMIT_PER_MINUTE", 10),
+		Auth: AuthConfig{
+			URL:          strings.TrimRight(r.optionalOr("AUTH_API_URL", defaultAuthURL), "/"),
+			Issuer:       r.optional("AUTH_ISSUER"),
+			SystemCode:   r.optionalOr("AUTH_SYSTEM_CODE", defaultSystemCode),
+			ClientSecret: r.optional("AUTH_CLIENT_SECRET"),
+		},
 		Identity: IdentityConfig{
 			URL:    r.optionalOr("IDENTITY_API_URL", defaultIdentityURL),
 			APIKey: r.optional("IDENTITY_API_KEY"),
@@ -105,6 +119,8 @@ func LoadFrom(lookup func(string) string) (Config, error) {
 		if strings.HasPrefix(cfg.Storage.Endpoint, "http://") {
 			r.fail("R2_ENDPOINT must be an https:// URL in production")
 		}
+		r.requireInProduction("AUTH_ISSUER", cfg.Auth.Issuer != "")
+		r.requireInProduction("AUTH_CLIENT_SECRET", cfg.Auth.ClientSecret != "")
 		r.requireInProduction("IDENTITY_API_KEY", cfg.Identity.APIKey != "")
 		r.requireInProduction("R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY", cfg.Storage.Enabled())
 	}
@@ -201,14 +217,6 @@ func (r *reader) httpURL(name string) string {
 	return value
 }
 
-func (r *reader) secret(name string) string {
-	value := r.required(name)
-	if value != "" && len(value) < minSecretLength {
-		r.fail("%s must have at least %d characters (generate it with: openssl rand -base64 48)", name, minSecretLength)
-	}
-	return value
-}
-
 func (r *reader) positiveIntOr(name string, fallback int) int {
 	value := r.optional(name)
 	if value == "" {
@@ -220,20 +228,6 @@ func (r *reader) positiveIntOr(name string, fallback int) int {
 		return fallback
 	}
 	return n
-}
-
-func (r *reader) accessTokenTTL(name string) time.Duration {
-	value := r.optional(name)
-	if value == "" {
-		return defaultAccessTokenTTL
-	}
-	seconds, err := strconv.Atoi(value)
-	ttl := time.Duration(seconds) * time.Second
-	if err != nil || ttl <= 0 || ttl > maxAccessTokenTTL {
-		r.fail("%s must be between 1 and %d seconds (got %q)", name, int(maxAccessTokenTTL.Seconds()), value)
-		return defaultAccessTokenTTL
-	}
-	return ttl
 }
 
 func (r *reader) list(name string) []string {

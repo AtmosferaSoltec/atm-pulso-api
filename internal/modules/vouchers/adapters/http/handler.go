@@ -25,11 +25,11 @@ type Handler struct{ service *app.Service }
 // NewHandler builds the handler.
 func NewHandler(service *app.Service) *Handler { return &Handler{service: service} }
 
-// Routes mounts the endpoints; scope applies the organization (or superadmin inspection) scope.
-func (h *Handler) Routes(protected gin.IRoutes, scope gin.HandlerFunc) {
-	protected.GET("/receipts/:id/vouchers", scope, h.list)
-	protected.POST("/receipts/:id/vouchers", scope, h.upload)
-	protected.GET("/vouchers/:id/file", scope, h.file)
+// Routes mounts the endpoints.
+func (h *Handler) Routes(protected gin.IRoutes) {
+	protected.GET("/receipts/:id/vouchers", h.list)
+	protected.POST("/receipts/:id/vouchers", h.upload)
+	protected.GET("/vouchers/:id/file", h.file)
 }
 
 func pathID(c *gin.Context) (uuid.UUID, bool) {

@@ -22,15 +22,15 @@ type Handler struct{ service *app.Service }
 // NewHandler builds the handler.
 func NewHandler(service *app.Service) *Handler { return &Handler{service: service} }
 
-// Routes mounts the endpoints; scope applies the organization (or superadmin inspection) scope.
-func (h *Handler) Routes(protected gin.IRoutes, scope gin.HandlerFunc) {
-	protected.GET("/members", scope, h.list)
-	protected.POST("/members", scope, h.enroll)
-	protected.GET("/members/:id", scope, h.get)
-	protected.PATCH("/members/:id", scope, h.update)
-	protected.POST("/members/:id/renewals", scope, h.renew)
-	protected.GET("/members/:id/receipts", scope, h.memberReceipts)
-	protected.GET("/receipts/:id", scope, h.receipt)
+// Routes mounts the endpoints.
+func (h *Handler) Routes(protected gin.IRoutes) {
+	protected.GET("/members", h.list)
+	protected.POST("/members", h.enroll)
+	protected.GET("/members/:id", h.get)
+	protected.PATCH("/members/:id", h.update)
+	protected.POST("/members/:id/renewals", h.renew)
+	protected.GET("/members/:id/receipts", h.memberReceipts)
+	protected.GET("/receipts/:id", h.receipt)
 }
 
 var statuses = map[string]bool{"": true, "active": true, "expiring": true, "expired": true, "scheduled": true}

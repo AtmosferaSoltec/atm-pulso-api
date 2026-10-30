@@ -13,7 +13,7 @@ var (
 	ErrReceiptNotFound = errors.New("receipt not found")
 	// ErrBranchNotAccessible: the user cannot work in that branch.
 	ErrBranchNotAccessible = errors.New("branch not accessible")
-	// ErrForbidden: the role cannot do this (the superadmin only consults).
+	// ErrForbidden: the role cannot do this.
 	ErrForbidden = errors.New("forbidden")
 )
 

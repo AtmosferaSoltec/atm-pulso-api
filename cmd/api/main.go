@@ -17,11 +17,10 @@ import (
 	"time"
 
 	"github.com/AtmosferaSoltec/atm-pulso-api/db"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/authapi"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/identity"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/access"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
-	accountslogos "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/adapters/logos"
-	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/app"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports"
@@ -38,11 +37,14 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/logger"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/middleware"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/objectstore"
-	"github.com/google/uuid"
 )
 
-// identityTimeout bounds each call to atm-identity-api.
-const identityTimeout = 6 * time.Second
+const (
+	// identityTimeout bounds each call to atm-identity-api.
+	identityTimeout = 6 * time.Second
+	// authTimeout bounds each call to atm-auth-api.
+	authTimeout = 6 * time.Second
+)
 
 func main() {
 	if len(os.Args) > 1 {
@@ -89,7 +91,6 @@ func run() int {
 		CORSOrigins:        cfg.CORSOrigins,
 		RateLimitPerMinute: cfg.RateLimitPerMinute,
 		BodyLimits: map[string]int64{
-			"PUT " + httpserver.APIPrefix + "/gyms/:gym_id/logo":      app.MaxLogoBytes + 1,
 			"POST " + httpserver.APIPrefix + "/receipts/:id/vouchers": vouchersdomain.MaxBytes + 1,
 		},
 	})
@@ -99,28 +100,22 @@ func run() int {
 	}
 	health.Register(api, pool)
 
-	// Without the R2 variables (development) the logo endpoints answer that storage is unavailable.
-	var logos app.LogoStore
+	// Without the R2 variables (development) the voucher endpoints answer that storage is unavailable.
 	var voucherStore vouchersapp.Store
 	if cfg.Storage.Enabled() {
-		client := objectstore.New(objectstore.Config(cfg.Storage))
-		logos = accountslogos.New(client)
-		voucherStore = vouchersstorage.New(client)
+		voucherStore = vouchersstorage.New(objectstore.New(objectstore.Config(cfg.Storage)))
 	} else {
-		log.Warn("R2 is not configured: gym logos and payment vouchers cannot be uploaded")
+		log.Warn("R2 is not configured: payment vouchers cannot be uploaded")
 	}
 
-	accountsModule, err := accounts.New(accounts.Deps{
-		Pool:           pool,
-		Clock:          clock.System{},
-		JWTSecret:      cfg.JWTAccessSecret,
-		AccessTokenTTL: cfg.AccessTokenTTL,
-		Logos:          logos,
-	})
-	if err != nil {
-		log.Error("modules", "error", err)
-		return 1
+	// Without a service secret (development only) company names fall back to the RUC and the team is unavailable.
+	var authClient authapi.Client
+	if cfg.Auth.ClientSecret != "" {
+		authClient = authapi.NewHTTPClient(cfg.Auth.URL, cfg.Auth.SystemCode, cfg.Auth.ClientSecret, authTimeout)
+	} else {
+		log.Warn("AUTH_CLIENT_SECRET is not set: company names and team management are unavailable")
 	}
+	accountsModule := accounts.New(accounts.Deps{Pool: pool, Clock: clock.System{}, Auth: authClient})
 
 	// Without an API key (development) a fake answers instead of identity-api.
 	var identityClient identity.Client = identity.Fake{}
@@ -131,22 +126,19 @@ func run() int {
 	}
 	documentsModule := documents.New(identityClient)
 
-	// Login has a tighter per-IP limit than the rest of the API.
-	limited := api.Group("", middleware.NewRateLimiter(cfg.LoginRateLimitPerMinute).Middleware())
-	protected := api.Group("", auth.Require(accountsModule.Authenticator()))
-	accountsModule.Routes(limited, protected)
-	accountsModule.PublicRoutes(api)
+	guard := auth.NewGuard(auth.NewJWKSVerifier(auth.VerifierConfig{JWKSURL: cfg.Auth.JWKSURL(), Issuer: cfg.Auth.Issuer}),
+		accountsModule.Resolver(), cfg.Auth.SystemCode)
+	protected := api.Group("", guard.User())
+	accountsModule.Routes(protected)
 	documentsModule.Routes(protected)
-	scope := auth.OrganizationScope(accountsModule.Organizations())
-	var logoURL func(uuid.UUID, string) string
-	if logos != nil {
-		logoURL = accountsModule.LogoURL
-	}
-	members.New(members.Deps{Pool: pool, Clock: clock.System{}, LogoURL: logoURL}).Routes(protected, scope)
-	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
-	// The CSV download is heavy: it shares the login's tighter per-IP limit.
-	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected, scope)
-	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope, middleware.NewRateLimiter(cfg.LoginRateLimitPerMinute).Middleware())
+	// The platform administrator (console-web) has its own, rate-limited surface.
+	heavy := middleware.NewRateLimiter(cfg.LoginRateLimitPerMinute).Middleware()
+	accountsModule.AdminRoutes(api.Group("/admin", heavy, guard.Superadmin()))
+	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected)
+	// The CSV download is heavy: it shares the tighter per-IP limit.
+	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, heavy)
 
 	if err := httpserver.Serve(ctx, router, cfg.Port, log); err != nil {
 		log.Error("server", "error", err)

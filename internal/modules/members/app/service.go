@@ -75,13 +75,6 @@ func normalizeAmount(raw string) (string, bool) {
 
 func (s *Service) today() time.Time { return clock.LimaDate(s.Clock.Now()) }
 
-func requireOperator(p auth.Principal) error {
-	if !p.CanOperate() {
-		return domain.ErrForbidden
-	}
-	return nil
-}
-
 // branchFor resolves a branch of the caller's organization the caller may work in.
 func (s *Service) branchFor(ctx context.Context, p auth.Principal, branchID uuid.UUID) (BranchInfo, error) {
 	branch, err := s.Directory.Branch(ctx, p.OrganizationID, branchID)
@@ -106,9 +99,6 @@ func (s *Service) Get(ctx context.Context, p auth.Principal, id uuid.UUID) (Memb
 
 // Update changes name and phone only.
 func (s *Service) Update(ctx context.Context, p auth.Principal, id uuid.UUID, name, phone *string) (MemberDetail, error) {
-	if err := requireOperator(p); err != nil {
-		return MemberDetail{}, err
-	}
 	current, err := s.Repo.Member(ctx, p.OrganizationID, id, s.today())
 	if err != nil {
 		return MemberDetail{}, err
@@ -167,9 +157,6 @@ func sellIssues(months int, amount, method, scope string) (string, []domain.Issu
 
 // Enroll creates the member, the first period, the payment and the receipt atomically.
 func (s *Service) Enroll(ctx context.Context, p auth.Principal, in EnrollInput) (Sale, bool, error) {
-	if err := requireOperator(p); err != nil {
-		return Sale{}, false, err
-	}
 	var issues []domain.Issue
 	name, nameOK := domain.NormalizeName(in.FullName)
 	if !nameOK {
@@ -231,9 +218,6 @@ func (s *Service) Enroll(ctx context.Context, p auth.Principal, in EnrollInput) 
 
 // Renew adds a period to an existing member.
 func (s *Service) Renew(ctx context.Context, p auth.Principal, memberID uuid.UUID, in RenewInput) (Sale, bool, error) {
-	if err := requireOperator(p); err != nil {
-		return Sale{}, false, err
-	}
 	amount, issues := sellIssues(in.Months, in.Amount, in.Method, in.AccessScope)
 	start, given, startOK := s.parseStart(in.StartsOn)
 	if !startOK {
