@@ -55,7 +55,7 @@ func newHarness(t *testing.T) harness {
 	t.Helper()
 	pool := testsupport.MigratedPool(t)
 
-	var sink io.Writer = io.Discard
+	sink := io.Discard
 	if os.Getenv("TEST_LOG") != "" {
 		sink = os.Stderr
 	}
