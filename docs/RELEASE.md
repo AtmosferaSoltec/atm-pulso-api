@@ -34,7 +34,7 @@ superadmin inserted by hand: it survives and ends at version 6). The `down` of e
 
 1. Merge to `main` (CI runs format, vet, lint and the tests against PostgreSQL), then push `production`.
 2. The compose `migrate` step applies 00003 to 00006. Watch it finish before the app starts.
-3. The first superadmin does not exist in production yet: insert it by hand with `go run ./scripts/first-superadmin`
+3. People and companies are created in console-web (atm-auth-api); there is no first user to insert.
    piped to `psql` (see README). Nothing seeds data.
 4. Smoke test: login, `GET /me`, `GET /catalog` (with the superadmin: `X-Organization-Id` is required, so check `GET /clients`), then create a test client and delete nothing in production.
 5. Headers to expect on every response: `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`.
@@ -74,3 +74,12 @@ business-rules.md won over the plans:
 - Rate limits are per IP and in memory (one replica); the CSV download shares the login's stricter limit.
 - Memory: 256 MB container; password hashing runs at most 4 at a time.
 - The web is not connected yet: see `atm-pulso-web/docs/plans/`.
+
+## API-07: central authentication (migration 00012)
+
+Identity moved to atm-auth-api: no login, passwords or sessions here; organization = auth client, gym = auth
+company, branches only from the superadmin (`/admin/*`, console-web). Migration `00012` **truncates every
+Pulso table** (nobody used the product) and drops the password columns, `user_gyms` and `gyms.logo_key`.
+Before deploying: system `pulso` with roles `admin`/`receptionist` in the console, its credential in
+`AUTH_CLIENT_SECRET`, `AUTH_ISSUER` in `/opt/pulso-api/.env`, the nginx location
+`deploy/host-nginx/console-pulso-api.location`, and the old `JWT_ACCESS_SECRET`/`ACCESS_TOKEN_TTL_SECONDS` removed.

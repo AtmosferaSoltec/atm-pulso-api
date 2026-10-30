@@ -47,8 +47,8 @@ done: see [plans/01-foundation-and-auth.md](plans/01-foundation-and-auth.md).
 2. **Local only.** Local PostgreSQL, local API, local web. Never connect to the production server,
    never read or write its `.env`, never push to `production`, never deploy. The owner's assistant
    deploys when everything is finished (see API-06).
-3. **No seed, no demo users, no "create superadmin" code.** The first superadmin is inserted by hand
-   (`scripts/first-superadmin`, README). Tests create and delete their own data.
+3. **No seed, no demo users, no user-creation code.** People and companies live in atm-auth-api (console-web).
+   Tests create and delete their own data.
 4. **Do not invent business rules.** If something is missing or two documents disagree, stop and
    ask the owner. Each plan lists "Questions for the owner" with the recommended default: use the
    default only if the owner told you to proceed.

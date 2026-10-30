@@ -7,7 +7,30 @@ client lives in `atm-pulso-web`. This project is independent: it is built the wa
 Rules and architecture: [AGENTS.md](AGENTS.md). Roadmap: [docs/plans/00-roadmap.md](docs/plans/00-roadmap.md).
 Contract: [docs/openapi.yaml](docs/openapi.yaml).
 
-## What works today (plans 01 to 06)
+## Identity: atm-auth-api
+
+Pulso has **no login, no passwords and no sessions**. People sign in at `atm-auth-api` (the web calls it
+directly: `POST /v1/login` with `system: "pulso"`) and send the access token (RS256) to this API as
+`Authorization: Bearer`. The API only verifies it with the public keys at
+`AUTH_API_URL/.well-known/jwks.json` (cached 10 minutes), checks issuer and expiry, and rebuilds who is
+asking on every request.
+
+| In atm-auth-api (console) | In Pulso |
+|---|---|
+| **Client** (the customer) | **Organization**: owns the shared member directory |
+| **Company** (tenant) of that client with Pulso enabled | **Gym**; the token's company is the *current gym* |
+| Person with access to the company, role `admin` or `receptionist` | **User** of that gym (one record per person per gym) |
+| Platform superadmin | `/admin/*` only: branches and gym look |
+
+Organizations, gyms (with a default branch "Sede principal") and users are recorded the first time a
+token for them is seen; the superadmin's `GET /admin/clients` also syncs every company with Pulso
+enabled. Branches are created **only by the superadmin from console-web** (Atmósfera charges per branch);
+a gym admin can never add one. Roles: `admin` (every branch of the current gym, team, prices) and
+`receptionist` (assigned branches). The team page uses atm-auth-api's *service* members API with Pulso's own
+credential (`AUTH_CLIENT_SECRET`), so Pulso decides that only admins manage people and no `manage_users`
+flag is needed; switching gym means asking atm-auth-api for a token of another company.
+
+## What works today
 
 The complete list, with bodies, responses and error codes, is [docs/openapi.yaml](docs/openapi.yaml);
 a test fails if the code and the contract differ. By area:
@@ -15,23 +38,24 @@ a test fails if the code and the contract differ. By area:
 | Area | Endpoints | Who |
 |---|---|---|
 | Health | `GET /health`, `/health/ready` | public |
-| Session | `POST /auth/login`, `GET/PATCH /me`, `POST /me/password` | login public; the rest signed in |
+| Profile | `GET/PATCH /me` | signed in |
 | Lookups | `GET /documents/persons/{dni}`, `/documents/companies/{ruc}` | signed in (through `atm-identity-api`) |
-| Directory | `GET /catalog` | every role (superadmin: inspection) |
-| Platform | `/clients`, `/clients/summary`, `/clients/{id}/gyms`, `/gyms/{id}/branches`, `/clients/{id}/owner` | superadmin |
-| Gym settings | `PATCH /gyms/{id}` | owner, admin of that gym |
-| Team | `/users` and `/users/{id}`, `/activate`, `/deactivate`, `/password` | owner, admin |
-| Members | `/members`, `/members/{id}`, `/members/{id}/renewals`, `/members/{id}/receipts`, `/receipts/{id}` | every role (writes: not the superadmin) |
-| Access | `POST /access/checks`, `GET /access/events`, `GET /access/summary` | every role |
-| Day passes | `/day-passes`, `/day-passes/{id}` | every role |
-| Reports | `GET /payments`, `/payments/export`, `/dashboard` | owner, admin (reception: the list without totals) |
+| Directory | `GET /catalog` | admin, reception |
+| Gym settings | `PATCH /gyms/{id}` (day pass price, membership prices, branch sharing) | admin of that gym |
+| Team | `/users` and `/users/{id}`, `/activate`, `/deactivate`, `/password` | admin |
+| Members | `/members`, `/members/{id}`, `/members/{id}/renewals`, `/members/{id}/receipts`, `/receipts/{id}` | admin, reception |
+| Access | `POST /access/checks`, `GET /access/events`, `GET /access/summary` | admin, reception |
+| Day passes | `/day-passes`, `/day-passes/{id}` | admin, reception |
+| Reports | `GET /payments`, `/payments/export`, `/dashboard` | admin (reception: the list without totals) |
+| Platform | `GET /admin/clients`, `PATCH /admin/gyms/{id}`, `POST /admin/gyms/{id}/branches`, `PATCH`/`DELETE /admin/branches/{id}` | superadmin (console-web) |
 
 Carné de extranjería has no lookup (`atm-identity-api` only resolves DNI and RUC): the web keeps
 it manual.
 
 ## Run it locally
 
-You need Go (see `go.mod`) and the shared local PostgreSQL (`atmosfera-postgres`).
+You need Go (see `go.mod`), the shared local PostgreSQL (`atmosfera-postgres`) and, to sign in for
+real, a local `atm-auth-api` with the system `pulso`, a client, a company and a person.
 
 ```sh
 # 1. Create the role, database and schema (once)
@@ -39,39 +63,18 @@ docker exec -i atmosfera-postgres psql -v ON_ERROR_STOP=1 -U postgres \
   -v app_password="'a-local-password'" -d postgres < scripts/provision-db.sql
 
 # 2. Configure
-cp .env.example .env        # fill DATABASE_URL (same password) and JWT_ACCESS_SECRET
-                            # (openssl rand -base64 48). Leave IDENTITY_API_KEY empty:
-                            # lookups then answer invented data.
+cp .env.example .env        # fill DATABASE_URL (same password), AUTH_API_URL and AUTH_ISSUER of your
+                            # local atm-auth-api. Leave IDENTITY_API_KEY and AUTH_CLIENT_SECRET empty:
+                            # lookups answer invented data and company names fall back to the RUC.
 
-# 3. Migrate, create your first user, run
+# 3. Migrate and run
 scripts/dev.sh migrate up
-go run ./scripts/first-superadmin     # prints the INSERT of your first user; run it in psql (see below)
 scripts/dev.sh                        # http://localhost:3001/api/v1/health
 ```
 
-There is **no seed**: the database starts empty. Create your first user with the tool below, then
-everything else (clients, gyms, branches, team) is created through the API itself, as in production.
-
-## The first superadmin (manual, on purpose)
-
-The application has no seed and no "create superadmin" code. The first user is inserted by hand:
-
-```sh
-go run ./scripts/first-superadmin
-```
-
-It asks for the DNI, the full name and a password (hidden, twice) and **prints** an `INSERT` with the
-argon2id hash; it never touches a database and the password never leaves your machine. Run the
-statement yourself:
-
-```sh
-# local database
-go run ./scripts/first-superadmin | docker exec -i atmosfera-postgres psql -v ON_ERROR_STOP=1 -U postgres -d pulso
-# production (when the time comes)
-go run ./scripts/first-superadmin | ssh atmosfera 'docker exec -i atm-postgres psql -v ON_ERROR_STOP=1 -U postgres -d pulso'
-```
-
-Then sign in: `POST /api/v1/auth/login` with that DNI and password.
+There is **no seed and no user table to fill**: the database starts empty and organizations, gyms and
+people appear when atm-auth-api's tokens reach the API. To try the API without atm-auth-api, mint tokens
+the way the integration tests do (`internal/platform/testsupport/tokens.go`).
 
 ## Tests
 
@@ -81,7 +84,7 @@ TEST_DATABASE_URL='postgres://USER:PASS@127.0.0.1:5432/pulso_test?sslmode=disabl
 ```
 
 For the integration tests use a **throwaway** database, not your working one (they create and
-delete their own rows, but they also load the demo accounts). For example:
+delete their own rows). For example:
 
 ```sh
 docker run -d --name pulso-test-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:17-alpine
@@ -116,14 +119,18 @@ this is what exists there and how to rebuild it if it is ever lost:
    ```
 2. `/opt/pulso-api` owned by `deploy`, with `/opt/pulso-api/.env` (mode 600, never in git) holding the
    variables of `.env.example` with production values: `APP_ENV=production`, the database URL
-   (`...@atm-postgres:5432/pulso?sslmode=disable&search_path=pulso`), a long `JWT_ACCESS_SECRET`,
-   `CORS_ORIGIN=https://pulso.atmosferast.com`, `IDENTITY_API_URL=http://identity-api:8080` and the key.
+   (`...@atm-postgres:5432/pulso?sslmode=disable&search_path=pulso`), `AUTH_API_URL=http://auth-api:8080`,
+   `AUTH_ISSUER` (the `iss` of atm-auth-api's tokens), `AUTH_SYSTEM_CODE=pulso`, `AUTH_CLIENT_SECRET`
+   (console → system `pulso` → "Generar credencial"), `CORS_ORIGIN=https://pulso.atmosferast.com`,
+   `IDENTITY_API_URL=http://identity-api:8080` and the key.
 3. Pulso's own key in `atm-identity-api` (printed once):
    `docker exec identity-api /app/identity-api create-client-system pulso "Pulso"`.
 4. The nginx site `pulso-api.atmosferast.com` → `127.0.0.1:3081` (the wildcard origin certificate).
 
-**After the first deploy**, insert the first superadmin by hand with `go run ./scripts/first-superadmin`
-(see "The first superadmin" above). There is no command for it in the container.
+**After the first deploy**, in console-web: create the system `pulso` and its roles `admin` and
+`receptionist`, enable it for each company, and give the people their access. Migration `00012` wipes every Pulso row: it was applied before anybody used the product.
+console-web reaches this API through `deploy/host-nginx/console-pulso-api.location`
+(`console.atmosferast.com/pulso-api/`), with the superadmin's token.
 
 The container is `pulso-api`, on the shared `atm-network`, published only on `127.0.0.1:3081`. The web
 calls the API across origins; the token travels in the `Authorization` header, never in a cookie.

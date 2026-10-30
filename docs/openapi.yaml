@@ -8,15 +8,25 @@ info:
     - Everything lives under `/api/v1`. JSON, `snake_case`.
     - Success: `{ "data": ... }`. Error: `{ "error": { "code", "message", "details" } }`.
     - `code` is stable and in English; `message` is Spanish and only a readable fallback.
-    - Authentication is a stateless **access token** in `Authorization: Bearer <token>`.
-      There is no refresh token and no session: the web keeps the token in memory only.
+    - Identity belongs to **atm-auth-api**. The web (and the console) sign in there and send the
+      access token (RS256) as `Authorization: Bearer <token>`; this API only verifies it with the
+      public keys at `<AUTH_API_URL>/.well-known/jwks.json` and keeps no session, password or login.
+      There is no login endpoint here.
+    - Two kinds of token. A **person's** token (role `user`, system `pulso`, one company and its client)
+      opens everything except `/admin/*`; its `app_role` must be `admin` or `receptionist`. The
+      **platform administrator's** token (atm-auth-api's superadmin, no system, no company) opens only `/admin/*`.
+    - Model: an auth *client* is an organization, an auth *company* with Pulso enabled is a gym (the token's
+      company is the current gym), and branches are created only by the superadmin from the console.
+    - Errors of the guard: `UNAUTHORIZED` (401, missing/invalid/expired token), `NO_ACCESS` (403, the token
+      does not open Pulso: other system, unknown role, no company), `USER_INACTIVE` (403, blocked in Pulso),
+      `FORBIDDEN` (403, wrong kind of token or role).
 servers:
   - url: http://localhost:3001/api/v1
     description: local development
 tags:
   - name: health
-  - name: auth
   - name: profile
+  - name: admin
   - name: documents
 
 paths:
@@ -44,38 +54,6 @@ paths:
         "200": { description: ok }
         "503": { $ref: "#/components/responses/Error" }
 
-  /auth/login:
-    post:
-      tags: [auth]
-      summary: Sign in with DNI and password.
-      description: |
-        Nothing is stored: no session row and no refresh token. An unknown DNI, a wrong
-        password and an inactive user all answer `INVALID_CREDENTIALS`, so the caller cannot
-        tell which one it was. After 5 failures in 15 minutes a DNI answers
-        `TOO_MANY_ATTEMPTS` with `Retry-After`. There is also a stricter per-IP limit.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [document_number, password]
-              properties:
-                document_number: { type: string, pattern: "^[0-9]{8}$", example: "10000002" }
-                password: { type: string, example: "Pulso2026!" }
-      responses:
-        "200":
-          description: signed in
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data: { $ref: "#/components/schemas/Session" }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
-        "401": { $ref: "#/components/responses/InvalidCredentials" }
-        "429": { $ref: "#/components/responses/TooManyAttempts" }
-
   /me:
     get:
       tags: [profile]
@@ -91,7 +69,7 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/User" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/PasswordChangeRequired" }
+        "403": { $ref: "#/components/responses/Forbidden" }
     patch:
       tags: [profile]
       summary: Edit your own non-sensitive data (name and phone).
@@ -121,18 +99,17 @@ paths:
                   data: { $ref: "#/components/schemas/User" }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/PasswordChangeRequired" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
-  /clients:
+  /admin/clients:
     get:
-      tags: [accounts]
-      summary: List clients with their gyms.
-      description: Superadmin only; organization inspection headers are ignored.
+      tags: [admin]
+      summary: Every client with its gyms and branches (superadmin).
+      description: |
+        First records every company that has Pulso enabled in atm-auth-api (its client as an organization,
+        itself as a gym with a default branch "Sede principal"); if atm-auth-api does not answer, the stored
+        clients are listed.
       security: [{ bearer: [] }]
-      parameters:
-        - { name: search, in: query, schema: { type: string } }
-        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
-        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
       responses:
         "200":
           description: Success.
@@ -140,134 +117,16 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [data]
                 properties:
                   data:
                     type: array
-                    items: { $ref: "#/components/schemas/Client" }
-                  meta: { $ref: "#/components/schemas/Pagination" }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
+                    items: { $ref: "#/components/schemas/AdminClient" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: FORBIDDEN or PASSWORD_CHANGE_REQUIRED.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "404":
-          description: NOT_FOUND.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-    post:
-      tags: [accounts]
-      summary: Create a client atomically with a DNI temporary password.
-      description: Superadmin only; organization inspection headers are ignored.
-      security: [{ bearer: [] }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/NewClient" }
-      responses:
-        "201":
-          description: Success.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [data]
-                properties:
-                  data: { $ref: "#/components/schemas/Client" }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: FORBIDDEN or PASSWORD_CHANGE_REQUIRED.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "404":
-          description: NOT_FOUND.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "409":
-          description: USER_DOCUMENT_TAKEN or CONFLICT.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-  /clients/summary:
-    get:
-      tags: [accounts]
-      summary: Count clients and their resources.
-      description: Superadmin only; organization inspection headers are ignored.
-      security: [{ bearer: [] }]
-      responses:
-        "200":
-          description: Success.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [data]
-                properties:
-                  data: { $ref: "#/components/schemas/ClientSummary" }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: FORBIDDEN or PASSWORD_CHANGE_REQUIRED.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "404":
-          description: NOT_FOUND.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-  /clients/{client_id}/gyms:
-    post:
-      tags: [accounts]
-      summary: Add a gym to a client.
-      description: Superadmin only; organization inspection headers are ignored.
-      security: [{ bearer: [] }]
-      parameters:
-        - { name: client_id, in: path, required: true, schema: { type: string, format: uuid } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/NewGym" }
-      responses:
-        "201":
-          description: Success.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [data]
-                properties:
-                  data: { $ref: "#/components/schemas/Gym" }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: FORBIDDEN or PASSWORD_CHANGE_REQUIRED.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "404":
-          description: NOT_FOUND.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "409":
-          description: USER_DOCUMENT_TAKEN or CONFLICT.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-  /gyms/{gym_id}/branches:
-    post:
-      tags: [accounts]
-      summary: Add a branch to a gym.
-      description: Superadmin only; organization inspection headers are ignored.
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/gyms/{gym_id}:
+    patch:
+      tags: [admin]
+      summary: Set the look of a gym (superadmin).
       security: [{ bearer: [] }]
       parameters:
         - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -275,34 +134,97 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/NewBranch" }
+            schema:
+              type: object
+              required: [brand_color]
+              properties:
+                brand_color: { type: string, pattern: '^#[0-9a-f]{6}$' }
       responses:
-        "201":
-          description: Success.
+        "200":
+          description: The gym.
           content:
             application/json:
               schema:
                 type: object
-                required: [data]
                 properties:
-                  data: { $ref: "#/components/schemas/CatalogBranch" }
+                  data: { $ref: "#/components/schemas/AdminGym" }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: FORBIDDEN or PASSWORD_CHANGE_REQUIRED.
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/Error" }
+  /admin/gyms/{gym_id}/branches:
+    post:
+      tags: [admin]
+      summary: Add a branch to a gym (superadmin). Atmósfera charges per branch, so gym admins never do this.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 80 }
+                address: { type: [string, "null"], maxLength: 200 }
+      responses:
+        "201":
+          description: The branch.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "404":
-          description: NOT_FOUND.
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/AdminBranch" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/Error" }
+  /admin/branches/{id}:
+    patch:
+      tags: [admin]
+      summary: Rename a branch or change its address (superadmin).
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Send only the fields to change; null address clears it.
+              properties:
+                name: { type: string, minLength: 1, maxLength: 80 }
+                address: { type: [string, "null"], maxLength: 200 }
+      responses:
+        "200":
+          description: The branch.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "409":
-          description: USER_DOCUMENT_TAKEN or CONFLICT.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/AdminBranch" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [admin]
+      summary: Remove a branch nobody has used (superadmin).
+      description: 409 `BRANCH_IN_USE` when it has members, sales, access history or receptionists, or is the last branch of its gym.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removed. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
 
   /catalog:
     get:
@@ -311,10 +233,6 @@ paths:
       description: Other roles ignore the inspection header and use their live organization.
       security: [{ bearer: [] }]
       parameters:
-        - name: X-Organization-Id
-          in: header
-          description: Required for superadmin inspection only.
-          schema: { type: string, format: uuid }
       responses:
         "200":
           description: Organization directory.
@@ -327,7 +245,7 @@ paths:
                   data: { $ref: "#/components/schemas/Catalog" }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/PasswordChangeRequired" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404":
           description: Organization does not exist.
           content:
@@ -338,13 +256,12 @@ paths:
     get:
       tags: [accounts]
       summary: List the users the caller manages.
-      description: Owner sees the organization; admin sees itself and the receptionists of its gym. Reception gets 403; the superadmin may inspect with X-Organization-Id.
+      description: |
+        The team of the current gym: the people atm-auth-api lets into it (merged with the branches Pulso
+        assigned; people the console added are recorded the first time they are listed). Admin only.
+        If atm-auth-api cannot be reached the list falls back to the people Pulso already knows.
       security: [{ bearer: [] }]
       parameters:
-        - name: X-Organization-Id
-          in: header
-          description: Superadmin inspection on GET only; ignored for other roles.
-          schema: { type: string, format: uuid }
         - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
         - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
       responses:
@@ -363,7 +280,7 @@ paths:
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
-          description: FORBIDDEN, PASSWORD_CHANGE_REQUIRED, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED, CANNOT_MODIFY_SELF or CANNOT_MODIFY_OWNER.
+          description: FORBIDDEN, NO_ACCESS, USER_INACTIVE, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED or CANNOT_MODIFY_SELF.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -374,8 +291,13 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
     post:
       tags: [accounts]
-      summary: Create an admin or receptionist.
-      description: The temporary password is the DNI and must be changed at first login. Only an owner creates admins; an admin creates receptionists of its own gym.
+      summary: Create an admin or receptionist in the current gym.
+      description: |
+        The account and the access are created in atm-auth-api (the DNI is the first password there and
+        must be changed at the first login). Admin only. An admin takes no branches; a receptionist needs
+        one or more branches of the current gym. Errors: `AUTH_UNAVAILABLE` (503), `USER_IN_OTHER_COMPANY` (409,
+        the person already works for another company: only Atmósfera can add them to a second one),
+        `ROLE_NOT_ASSIGNABLE`, `SCOPE_NOT_ALLOWED` (a branch of another gym or client).
       security: [{ bearer: [] }]
       requestBody:
         required: true
@@ -395,7 +317,7 @@ paths:
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
-          description: FORBIDDEN, PASSWORD_CHANGE_REQUIRED, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED, CANNOT_MODIFY_SELF or CANNOT_MODIFY_OWNER.
+          description: FORBIDDEN, NO_ACCESS, USER_INACTIVE, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED or CANNOT_MODIFY_SELF.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -405,15 +327,15 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "409":
-          description: USER_DOCUMENT_TAKEN or CONFLICT.
+          description: USER_DOCUMENT_TAKEN, USER_IN_OTHER_COMPANY or CONFLICT.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
   /users/{id}:
     patch:
       tags: [accounts]
-      summary: Change a user's name, DNI, role, gym or branches.
-      description: A DNI correction and a scope change invalidate the user's tokens. Nobody edits themselves or an owner.
+      summary: Change a team member's name, role or branches.
+      description: A new role is also applied in atm-auth-api. The DNI cannot be edited. Nobody edits themselves.
       security: [{ bearer: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -435,7 +357,7 @@ paths:
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
-          description: FORBIDDEN, PASSWORD_CHANGE_REQUIRED, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED, CANNOT_MODIFY_SELF or CANNOT_MODIFY_OWNER.
+          description: FORBIDDEN, NO_ACCESS, USER_INACTIVE, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED or CANNOT_MODIFY_SELF.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -445,7 +367,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "409":
-          description: USER_DOCUMENT_TAKEN or CONFLICT.
+          description: USER_DOCUMENT_TAKEN, USER_IN_OTHER_COMPANY or CONFLICT.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -470,7 +392,7 @@ paths:
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
-          description: FORBIDDEN, PASSWORD_CHANGE_REQUIRED, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED, CANNOT_MODIFY_SELF or CANNOT_MODIFY_OWNER.
+          description: FORBIDDEN, NO_ACCESS, USER_INACTIVE, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED or CANNOT_MODIFY_SELF.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -500,7 +422,7 @@ paths:
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
-          description: FORBIDDEN, PASSWORD_CHANGE_REQUIRED, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED, CANNOT_MODIFY_SELF or CANNOT_MODIFY_OWNER.
+          description: FORBIDDEN, NO_ACCESS, USER_INACTIVE, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED or CANNOT_MODIFY_SELF.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -512,8 +434,8 @@ paths:
   /users/{id}/password:
     post:
       tags: [accounts]
-      summary: Reset a user's password to their DNI.
-      description: Sets must_change_password and invalidates existing tokens.
+      summary: Reset a team member's password to their DNI (in atm-auth-api).
+      description: They must choose a new password at their next login. Admin only; `AUTH_UNAVAILABLE` (503) if atm-auth-api does not answer.
       security: [{ bearer: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -530,7 +452,7 @@ paths:
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
-          description: FORBIDDEN, PASSWORD_CHANGE_REQUIRED, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED, CANNOT_MODIFY_SELF or CANNOT_MODIFY_OWNER.
+          description: FORBIDDEN, NO_ACCESS, USER_INACTIVE, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED or CANNOT_MODIFY_SELF.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -542,12 +464,13 @@ paths:
   /gyms/{gym_id}:
     patch:
       tags: [accounts]
-      summary: Change a gym's identity (superadmin) or its day pass price, branch sharing and membership prices (owner or admin).
+      summary: Change the rules of the current gym (admin).
       description: |
-        Send only the fields to change; null for display_name or day_pass_price restores the default.
-        The identity (`display_name`, `brand_color`; the logo has its own endpoint) is set only by the superadmin,
-        who may change nothing else. The owner of the organization or the admin of that gym change the rest,
-        and get 403 FORBIDDEN if they send an identity field.
+        Send only the fields to change; null for day_pass_price restores the default. A gym admin changes
+        `day_pass_price`, `branch_sharing` and `membership_prices` of the gym of their token. The identity
+        (`display_name`, `brand_color`, logo, name) is configured by Atmósfera from the console
+        (`PATCH /admin/gyms/{gym_id}`): sending `display_name` or `brand_color` here answers 403 `FORBIDDEN`.
+        A gym that is not the one of the token answers 403 `SCOPE_NOT_ALLOWED`.
       security: [{ bearer: [] }]
       parameters:
         - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -569,7 +492,7 @@ paths:
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
-          description: FORBIDDEN, PASSWORD_CHANGE_REQUIRED, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED, CANNOT_MODIFY_SELF or CANNOT_MODIFY_OWNER.
+          description: FORBIDDEN, NO_ACCESS, USER_INACTIVE, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED or CANNOT_MODIFY_SELF.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -578,191 +501,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-  /gyms/{gym_id}/logo:
-    get:
-      tags: [accounts]
-      summary: Download a gym's logo.
-      description: |
-        Public (no token: an `<img>` cannot send one). The logo is branding, not private data. The bucket is private; the API
-        reads the file and streams it. `v` is the version from `logo_url`: when it is the current one the answer is cacheable
-        for good (`immutable`), otherwise it is `no-cache`.
-      security: []
-      parameters:
-        - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
-        - { name: v, in: query, required: false, schema: { type: string } }
-      responses:
-        "200":
-          description: The image.
-          content:
-            image/png: { schema: { type: string, format: binary } }
-            image/jpeg: { schema: { type: string, format: binary } }
-            image/webp: { schema: { type: string, format: binary } }
-        "404":
-          description: NOT_FOUND (no such gym, or it has no logo).
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "503":
-          description: STORAGE_UNAVAILABLE.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-    put:
-      tags: [accounts]
-      summary: Set a gym's logo.
-      description: |
-        Superadmin only. The body is the image itself (not JSON): PNG, JPEG or WebP, at most 10 MB. The type is
-        checked by the file's content, never by its name or the declared Content-Type. The previous logo is deleted.
-        Answers 503 STORAGE_UNAVAILABLE when no object store is configured.
-      security: [{ bearer: [] }]
-      parameters:
-        - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
-      requestBody:
-        required: true
-        content:
-          image/png: { schema: { type: string, format: binary } }
-          image/jpeg: { schema: { type: string, format: binary } }
-          image/webp: { schema: { type: string, format: binary } }
-      responses:
-        "200":
-          description: Success.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [data]
-                properties:
-                  data: { $ref: "#/components/schemas/Gym" }
-        "400":
-          description: VALIDATION_FAILED with field `logo` and code LOGO_TYPE_INVALID or LOGO_SIZE_INVALID.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: FORBIDDEN (not the superadmin).
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "404":
-          description: NOT_FOUND.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "503":
-          description: STORAGE_UNAVAILABLE.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-    delete:
-      tags: [accounts]
-      summary: Remove a gym's logo.
-      description: Superadmin only. The file is deleted from the object store.
-      security: [{ bearer: [] }]
-      parameters:
-        - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
-      responses:
-        "200":
-          description: Success.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [data]
-                properties:
-                  data: { $ref: "#/components/schemas/Gym" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: FORBIDDEN (not the superadmin).
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "404":
-          description: NOT_FOUND.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "503":
-          description: STORAGE_UNAVAILABLE.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-  /clients/{client_id}/owner:
-    patch:
-      tags: [accounts]
-      summary: Correct a client owner's name or DNI.
-      description: Superadmin only. Role, gym and branches cannot be changed here. Invalidates the owner's tokens.
-      security: [{ bearer: [] }]
-      parameters:
-        - { name: client_id, in: path, required: true, schema: { type: string, format: uuid } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/UserChanges" }
-      responses:
-        "200":
-          description: Success.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [data]
-                properties:
-                  data: { $ref: "#/components/schemas/TeamUser" }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: FORBIDDEN, PASSWORD_CHANGE_REQUIRED, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED, CANNOT_MODIFY_SELF or CANNOT_MODIFY_OWNER.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "404":
-          description: NOT_FOUND (also for resources of another organization).
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "409":
-          description: USER_DOCUMENT_TAKEN or CONFLICT.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-  /clients/{client_id}/owner/password:
-    post:
-      tags: [accounts]
-      summary: Reset a client owner's password to their DNI.
-      description: Superadmin only.
-      security: [{ bearer: [] }]
-      parameters:
-        - { name: client_id, in: path, required: true, schema: { type: string, format: uuid } }
-      responses:
-        "200":
-          description: Success.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [data]
-                properties:
-                  data: { $ref: "#/components/schemas/TeamUser" }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: FORBIDDEN, PASSWORD_CHANGE_REQUIRED, ROLE_NOT_ASSIGNABLE, SCOPE_NOT_ALLOWED, CANNOT_MODIFY_SELF or CANNOT_MODIFY_OWNER.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "404":
-          description: NOT_FOUND (also for resources of another organization).
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
   /members:
     get:
       tags: [members]
       summary: List the shared member directory with status counts.
-      description: Every role of the organization sees every member. The superadmin may inspect with X-Organization-Id. Counts ignore the status filter but respect q and home_branch_id.
+      description: Every role of the organization sees every member. Counts ignore the status filter but respect q and home_branch_id.
       security: [{ bearer: [] }]
       parameters:
         - { name: q, in: query, schema: { type: string }, description: Name or document (contains). }
@@ -795,7 +538,7 @@ paths:
       description: |
         The branch must be one the caller works in. Repeating the same `id` returns the original sale with 200.
         Errors: MEMBER_DOCUMENT_TAKEN (409, details.member_id), BRANCH_NOT_ACCESSIBLE (403), SCOPE_NOT_ALLOWED (400, foreign branch),
-        ACCESS_BRANCHES_INVALID (400), VALIDATION_FAILED (400). The superadmin gets 403.
+        ACCESS_BRANCHES_INVALID (400), VALIDATION_FAILED (400).
       security: [{ bearer: [] }]
       requestBody:
         required: true
@@ -879,7 +622,7 @@ paths:
     get:
       tags: [vouchers]
       summary: List the proofs of payment attached to a receipt's payment.
-      description: Oldest first. Same reach as the branch where the payment was collected; the superadmin consults with `X-Organization-Id`.
+      description: Oldest first. Same reach as the branch where the payment was collected.
       security: [{ bearer: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: The receipt id. }
@@ -901,7 +644,7 @@ paths:
       description: |
         Optional and never for cash. The body is the file itself (not JSON): PNG, JPEG, WebP or PDF, at most 10 MB, checked by its content.
         Up to 5 per payment (a payment split in several transfers). Vouchers cannot be edited or deleted: they are evidence.
-        Needs the right to operate in that branch (the superadmin only consults).
+        Needs access to that branch.
         Answers 503 STORAGE_UNAVAILABLE when no object store is configured.
       security: [{ bearer: [] }]
       parameters:
@@ -1011,7 +754,7 @@ paths:
     get:
       tags: [access]
       summary: History of access entries (checks and day passes), newest first.
-      description: Owner sees the organization, admin its gym, reception its assigned branches. A `branch_id` the caller cannot reach is 403 BRANCH_NOT_ACCESSIBLE.
+      description: Admin sees the current gym, reception its assigned branches. A `branch_id` the caller cannot reach is 403 BRANCH_NOT_ACCESSIBLE.
       security: [{ bearer: [] }]
       parameters:
         - { name: branch_id, in: query, schema: { type: string, format: uuid } }
@@ -1133,7 +876,7 @@ paths:
       tags: [reports]
       summary: Payments of the branches the caller reaches, with the totals of the whole filter.
       description: |
-        Owner reaches the organization, admin its gym, reception its assigned branches. Dates are Lima dates, inclusive; the default range is the current month and the widest is 366 days.
+        Admin reaches the current gym, reception its assigned branches. Dates are Lima dates, inclusive; the default range is the current month and the widest is 366 days.
         `meta.totals` covers the whole filter (not just the page) and is **omitted for reception**, who must not get KPIs.
       security: [{ bearer: [] }]
       parameters:
@@ -1170,7 +913,7 @@ paths:
       tags: [reports]
       summary: Download the filtered payments as CSV.
       description: |
-        Owner and admin only (reception gets 403). Same filters as `/payments`, no pagination. UTF-8 with BOM, comma separated; columns
+        Admin only (reception gets 403). Same filters as `/payments`, no pagination. UTF-8 with BOM, comma separated; columns
         Boleta, Miembro, Documento, Plan, Importe, Medio de pago, Fecha. More than 10,000 rows is 413 EXPORT_TOO_LARGE. Cells that start with `= + - @` are prefixed with `'`.
         Fetch it with the Bearer header and save the blob; never put the token in a URL.
       security: [{ bearer: [] }]
@@ -1196,7 +939,7 @@ paths:
     get:
       tags: [reports]
       summary: Figures of a gym or branch for today and this month.
-      description: Owner and admin only (reception gets 403). A new organization answers zeros, never sample data. `expiring_soon` has at most five members, nearest end date first.
+      description: Admin only (reception gets 403). A new organization answers zeros, never sample data. `expiring_soon` has at most five members, nearest end date first.
       security: [{ bearer: [] }]
       parameters:
         - { name: branch_id, in: query, schema: { type: string, format: uuid } }
@@ -1206,49 +949,6 @@ paths:
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ApiError" }
-
-  /me/password:
-    post:
-      tags: [profile]
-      summary: Change your own password.
-      description: |
-        Every older token stops working at once and a fresh one is returned, so the user
-        stays signed in on this device for a voluntary change. When `must_change_password`
-        is true, completion returns `login_required: true` without a token; sign in again.
-        Restricted tokens only allow GET /me and POST /me/password; other authenticated
-        endpoints return 403 PASSWORD_CHANGE_REQUIRED. A wrong current password answers
-        `CURRENT_PASSWORD_INCORRECT` with **400** (not 401, so the web does not read it as an
-        ended session) and repeated failures are limited.
-      security: [{ bearer: [] }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [current_password, new_password]
-              properties:
-                current_password: { type: string }
-                new_password: { type: string, minLength: 8, maxLength: 128 }
-      responses:
-        "200":
-          description: password changed
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data:
-                    oneOf:
-                      - $ref: "#/components/schemas/Session"
-                      - type: object
-                        required: [login_required]
-                        properties:
-                          login_required: { type: boolean, const: true }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/PasswordChangeRequired" }
-        "429": { $ref: "#/components/responses/TooManyAttempts" }
 
   /documents/persons/{document_number}:
     get:
@@ -1269,7 +969,7 @@ paths:
                   data: { $ref: "#/components/schemas/Person" }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/PasswordChangeRequired" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/DocumentNotFound" }
         "502": { $ref: "#/components/responses/LookupUnavailable" }
 
@@ -1291,7 +991,7 @@ paths:
                   data: { $ref: "#/components/schemas/Company" }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/PasswordChangeRequired" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/DocumentNotFound" }
         "502": { $ref: "#/components/responses/LookupUnavailable" }
 
@@ -1309,67 +1009,6 @@ components:
         page: { type: integer }
         page_size: { type: integer }
         total: { type: integer }
-    ClientSummary:
-      type: object
-      required: [clients, gyms, branches, client_users]
-      properties:
-        clients: { type: integer }
-        gyms: { type: integer }
-        branches: { type: integer }
-        client_users: { type: integer }
-    Client:
-      type: object
-      required: [id, name, owner, gyms]
-      properties:
-        id: { type: string, format: uuid }
-        name: { type: string }
-        owner:
-          type: object
-          required: [id, document_number, full_name, is_active]
-          properties:
-            id: { type: string, format: uuid }
-            document_number: { type: string }
-            full_name: { type: string }
-            is_active: { type: boolean }
-        gyms:
-          type: array
-          items: { $ref: "#/components/schemas/Gym" }
-    NewClient:
-      type: object
-      required: [owner, gyms]
-      properties:
-        id: { type: string, format: uuid }
-        owner:
-          type: object
-          required: [document_number, first_names, last_names, email, phone]
-          properties:
-            document_number: { type: string, pattern: '^[0-9]{8}$' }
-            first_names: { type: string }
-            last_names: { type: string }
-            email: { type: string, format: email }
-            phone: { type: string, pattern: '^9[0-9]{8}$' }
-        gyms:
-          type: array
-          minItems: 1
-          items: { $ref: "#/components/schemas/NewGym" }
-    NewGym:
-      type: object
-      required: [name, branches]
-      properties:
-        id: { type: string, format: uuid }
-        name: { type: string, minLength: 1, maxLength: 120 }
-        tax_id: { type: string, pattern: '^[0-9]{11}$' }
-        branches:
-          type: array
-          minItems: 1
-          items: { $ref: "#/components/schemas/NewBranch" }
-    NewBranch:
-      type: object
-      required: [name]
-      properties:
-        id: { type: string, format: uuid }
-        name: { type: string, minLength: 1, maxLength: 120 }
-        address: { type: string }
     CatalogBranch:
       type: object
       required: [id, name, address, accessible]
@@ -1393,9 +1032,9 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         display_name: { type: [string, "null"] }
-        tax_id: { type: [string, "null"] }
+        tax_id: { type: [string, "null"], description: RUC; null when the company has none. }
         brand_color: { type: string, pattern: '^#[0-9a-f]{6}$' }
-        logo_url: { type: [string, "null"], example: "/gyms/0190…/logo?v=0190…", description: Address of the logo relative to the API prefix (prepend the API base URL); changes with every upload. Null when the gym has none. }
+        logo_url: { type: [string, "null"], description: Always null for now; the logo will come from the company profile of atm-auth-api. }
         day_pass_price: { type: string, example: "15.00" }
         day_pass_price_is_default: { type: boolean }
         branch_sharing: { type: boolean }
@@ -1415,19 +1054,15 @@ components:
               accessible: { type: boolean }
     TeamUser:
       type: object
-      required: [id, full_name, document_number, phone, role, is_active, is_self, gyms, branches]
+      required: [id, full_name, document_number, phone, role, is_active, is_self, branches]
       properties:
         id: { type: string, format: uuid }
         full_name: { type: string }
         document_number: { type: string }
         phone: { type: [string, "null"] }
-        role: { type: string, enum: [owner, admin, receptionist] }
-        is_active: { type: boolean }
+        role: { type: string, enum: [admin, receptionist] }
+        is_active: { type: boolean, description: False when blocked in Pulso or disabled in atm-auth-api. }
         is_self: { type: boolean }
-        gyms:
-          type: array
-          description: The gyms an admin manages (one or more, chosen by the owner). Empty for the other roles.
-          items: { $ref: "#/components/schemas/Named" }
         branches:
           type: array
           items:
@@ -1441,40 +1076,27 @@ components:
       type: object
       required: [full_name, document_number, role]
       properties:
-        id: { type: string, format: uuid, description: Optional; repeating a request with the same id is idempotent. }
         full_name: { type: string, minLength: 3, maxLength: 120 }
         document_number: { type: string, pattern: "^[0-9]{8}$" }
         role: { type: string, enum: [admin, receptionist] }
-        gym_ids:
-          type: array
-          minItems: 1
-          description: Required for admin (one or more gyms of the organization); refused for receptionist. Only an owner can create an admin.
-          items: { type: string, format: uuid }
         branch_ids:
           type: array
-          description: Required for receptionist (one or more).
+          description: Required for receptionist (one or more branches of the current gym); refused for admin (`SCOPE_INVALID`).
           items: { type: string, format: uuid }
     UserChanges:
       type: object
       description: Send only the fields to change.
       properties:
         full_name: { type: string, minLength: 3, maxLength: 120 }
-        document_number: { type: string, pattern: "^[0-9]{8}$" }
         role: { type: string, enum: [admin, receptionist] }
-        gym_ids:
-          type: array
-          minItems: 1
-          description: Replaces the gyms of an admin. Only an owner can change them.
-          items: { type: string, format: uuid }
         branch_ids:
           type: array
+          description: Replaces the branches of a receptionist (required when the role becomes receptionist).
           items: { type: string, format: uuid }
     GymChanges:
       type: object
       description: Send only the fields to change.
       properties:
-        display_name: { type: [string, "null"], minLength: 1, maxLength: 80 }
-        brand_color: { type: string, pattern: '^#[0-9a-f]{6}$' }
         day_pass_price: { type: [string, "null"], example: "15.00" }
         branch_sharing: { type: boolean }
         membership_prices:
@@ -1791,35 +1413,30 @@ components:
               ends_on: { type: string, format: date }
               days_remaining: { type: integer }
               phone: { type: string }
-    Session:
-      type: object
-      properties:
-        access_token: { type: string }
-        token_type: { type: string, example: Bearer }
-        expires_at: { type: string, format: date-time }
-        expires_in: { type: integer, description: Seconds until it stops working, example: 28800 }
-        user: { $ref: "#/components/schemas/User" }
     User:
       type: object
-      required: [must_change_password]
+      required: [id, document_number, full_name, phone, role, organization, gym, branches]
       properties:
-        must_change_password: { type: boolean }
         id: { type: string, format: uuid }
-        document_type: { type: string, enum: [dni] }
         document_number: { type: string, example: "10000002" }
         full_name: { type: string }
         phone: { type: [string, "null"] }
-        role: { type: string, enum: [superadmin, owner, admin, receptionist] }
+        role: { type: string, enum: [admin, receptionist] }
         organization:
-          description: The client. Null for the superadmin.
-          oneOf: [{ $ref: "#/components/schemas/Named" }, { type: "null" }]
-        gyms:
-          type: array
-          description: Only an admin has gyms (one or more). Empty for the other roles.
-          items: { $ref: "#/components/schemas/Named" }
+          description: The client (owner of one or more gyms).
+          $ref: "#/components/schemas/Named"
+        gym:
+          description: The company of the token, the gym the person is working in.
+          type: object
+          required: [id, name, brand_color, logo_url]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            brand_color: { type: string, pattern: '^#[0-9a-f]{6}$' }
+            logo_url: { type: [string, "null"] }
         branches:
           type: array
-          description: Only a receptionist has assigned branches.
+          description: All the branches of the gym for an admin, the assigned ones for a receptionist.
           items:
             type: object
             properties:
@@ -1827,6 +1444,35 @@ components:
               name: { type: string }
               gym_id: { type: string, format: uuid }
               gym_name: { type: string }
+    AdminBranch:
+      type: object
+      required: [id, name, address]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        address: { type: [string, "null"] }
+    AdminGym:
+      type: object
+      required: [id, auth_tenant_id, ruc, name, brand_color, branches]
+      properties:
+        id: { type: string, format: uuid }
+        auth_tenant_id: { type: string, format: uuid }
+        ruc: { type: [string, "null"], description: Null when the company has none. }
+        name: { type: string }
+        brand_color: { type: string, pattern: '^#[0-9a-f]{6}$' }
+        branches:
+          type: array
+          items: { $ref: "#/components/schemas/AdminBranch" }
+    AdminClient:
+      type: object
+      required: [id, auth_client_id, name, gyms]
+      properties:
+        id: { type: string, format: uuid }
+        auth_client_id: { type: string, format: uuid }
+        name: { type: string }
+        gyms:
+          type: array
+          items: { $ref: "#/components/schemas/AdminGym" }
     Named:
       type: object
       required: [id, name]
@@ -1873,25 +1519,13 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
-    PasswordChangeRequired:
-      description: "`PASSWORD_CHANGE_REQUIRED`: set a new password before accessing the application."
+    Forbidden:
+      description: "`FORBIDDEN`, `NO_ACCESS` (the token does not open Pulso) or `USER_INACTIVE` (blocked in Pulso)."
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     Unauthorized:
-      description: "`UNAUTHORIZED`: missing, invalid or expired token, inactive user, or a token from before a password change."
-      content:
-        application/json:
-          schema: { $ref: "#/components/schemas/Error" }
-    InvalidCredentials:
-      description: "`INVALID_CREDENTIALS`."
-      content:
-        application/json:
-          schema: { $ref: "#/components/schemas/Error" }
-    TooManyAttempts:
-      description: "`TOO_MANY_ATTEMPTS`. `Retry-After` says how many seconds to wait."
-      headers:
-        Retry-After: { schema: { type: integer } }
+      description: "`UNAUTHORIZED`: missing, invalid or expired token. Ask atm-auth-api for a new one (refresh) and retry once."
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

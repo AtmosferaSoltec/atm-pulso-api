@@ -36,14 +36,14 @@ func (r *Repository) Clients(ctx context.Context) ([]app.AdminClient, error) {
 	}
 
 	gymIndex := map[uuid.UUID][2]int{}
-	rows, err = r.pool.Query(ctx, `SELECT id, organization_id, auth_tenant_id, tax_id, name FROM gyms ORDER BY name, id`)
+	rows, err = r.pool.Query(ctx, `SELECT id, organization_id, auth_tenant_id, tax_id, name, brand_color FROM gyms ORDER BY name, id`)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		gym := app.AdminGym{Branches: []app.AdminBranch{}}
 		var org uuid.UUID
-		if err := rows.Scan(&gym.ID, &org, &gym.AuthTenantID, &gym.RUC, &gym.Name); err != nil {
+		if err := rows.Scan(&gym.ID, &org, &gym.AuthTenantID, &gym.RUC, &gym.Name, &gym.BrandColor); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -71,6 +71,33 @@ func (r *Repository) Clients(ctx context.Context) ([]app.AdminClient, error) {
 		clients[at[0]].Gyms[at[1]].Branches = append(clients[at[0]].Gyms[at[1]].Branches, branch)
 	}
 	return clients, rows.Err()
+}
+
+// SetGymColor sets the brand colour of a gym and returns the gym with its branches.
+func (r *Repository) SetGymColor(ctx context.Context, gymID uuid.UUID, color string) (app.AdminGym, error) {
+	gym := app.AdminGym{Branches: []app.AdminBranch{}}
+	err := r.pool.QueryRow(ctx, `UPDATE gyms SET brand_color = $2, updated_at = now() WHERE id = $1
+		RETURNING id, auth_tenant_id, tax_id, name, brand_color`, gymID, color).
+		Scan(&gym.ID, &gym.AuthTenantID, &gym.RUC, &gym.Name, &gym.BrandColor)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return app.AdminGym{}, domain.ErrResourceNotFound
+	}
+	if err != nil {
+		return app.AdminGym{}, err
+	}
+	rows, err := r.pool.Query(ctx, `SELECT id, name, address FROM branches WHERE gym_id = $1 ORDER BY created_at, id`, gymID)
+	if err != nil {
+		return app.AdminGym{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var b app.AdminBranch
+		if err := rows.Scan(&b.ID, &b.Name, &b.Address); err != nil {
+			return app.AdminGym{}, err
+		}
+		gym.Branches = append(gym.Branches, b)
+	}
+	return gym, rows.Err()
 }
 
 // AddBranch creates a branch in a gym.

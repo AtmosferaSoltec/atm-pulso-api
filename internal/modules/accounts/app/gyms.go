@@ -24,8 +24,9 @@ func (o *Optional[T]) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &o.Value)
 }
 
-// GymChanges is what the admin of a gym may change. The display name is kept to answer
-// 403: the identity of a gym comes from atm-auth-api and Atmósfera, not from the gym.
+// GymChanges is what the admin of a gym may change: day pass price, branch sharing and membership
+// prices. The display name and the colour are kept only to answer 403: the identity of a gym is
+// configured by Atmósfera from the console, not by the gym.
 type GymChanges struct {
 	DisplayName   Optional[string] `json:"display_name"`
 	BrandColor    Optional[string] `json:"brand_color"`
@@ -64,8 +65,8 @@ func normalizePrices(prices []MembershipPrice) ([]MembershipPrice, bool) {
 	return append([]MembershipPrice{}, prices...), true
 }
 
-// UpdateGym changes the rules of the admin's current gym: colour, day pass price, branch
-// sharing and membership prices. The name, RUC and branches are not the gym's to change.
+// UpdateGym changes the rules of the admin's current gym: day pass price, branch sharing and
+// membership prices. Its identity (name, RUC, colour) and branches are not the gym's to change.
 func (s *Service) UpdateGym(ctx context.Context, p auth.Principal, id uuid.UUID, input GymChanges) (Gym, error) {
 	if !p.CanManageGym(id) {
 		if p.Role != auth.RoleAdmin {
@@ -73,11 +74,8 @@ func (s *Service) UpdateGym(ctx context.Context, p auth.Principal, id uuid.UUID,
 		}
 		return Gym{}, domain.ErrScopeNotAllowed
 	}
-	if input.DisplayName.Set {
+	if input.DisplayName.Set || input.BrandColor.Set {
 		return Gym{}, domain.ErrForbidden
-	}
-	if input.BrandColor.Set && (input.BrandColor.Value == nil || !colorPattern.MatchString(*input.BrandColor.Value)) {
-		return Gym{}, fieldError("brand_color", "BRAND_COLOR_INVALID")
 	}
 	if input.BranchSharing.Set && input.BranchSharing.Value == nil {
 		return Gym{}, fieldError("branch_sharing", "BOOLEAN_REQUIRED")

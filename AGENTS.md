@@ -10,18 +10,20 @@ The backend of **Pulso**, Atmósfera's gym administration product. The web clien
 `atm-pulso-web` (React, a separate repo). This API is **independent**: it follows the way
 `atm-orbita-api` is built, but shares no code and no database with it or with any other project.
 
-Pulso serves many gyms at once (**multi-tenant**): an *organization* is a client (its owner),
-it owns *gyms*, and each gym has *branches*. Members, payments, access control and day passes
-(to come, see `docs/plans/00-roadmap.md`) always belong to one organization.
+Pulso serves many gyms at once (**multi-tenant**). Identity belongs to **atm-auth-api**: an auth *client*
+(the customer) is an *organization*, and each of its *companies* with Pulso enabled is a *gym*. Gyms have
+*branches*. Members, payments, access control and day passes always belong to one organization.
 
 Business rules that shape the code:
 
-- **There are no plans or limits in the product.** Only the superadmin (Atmósfera) creates
-  gyms and branches, and only the superadmin sets a gym's identity (display name, colour, logo).
-  Owners and admins can never do either. Anything commercial is handled outside the system.
-- The member directory is shared by every gym and branch of the same owner. Access between
-  branches is a per-gym rule set by that gym's administrator.
-- Only an owner creates admins; an admin creates reception staff.
+- **There are no plans or limits in the API.** Gyms are companies created in console-web; branches are
+  created, renamed and removed **only by the platform superadmin** from console-web (`/api/v1/admin`),
+  because Atmósfera charges per branch. A gym's identity (name, RUC, colour, later the logo) is set from
+  the console too. Gym admins never create gyms or branches. Anything commercial is handled outside the system.
+- The member directory is shared by every gym and branch of the same organization. Access between
+  branches is a per-gym rule set by that gym's admin.
+- Only two roles exist, `admin` and `receptionist` (the `app_role` of the token). An admin creates every
+  user of the current gym (admins and reception); there is no owner and no Pulso superadmin.
 
 ## 2. Language: everything in English
 
@@ -37,7 +39,7 @@ error codes: **English only**. The only Spanish allowed is what an end user read
 | razón social | `legal_name` |
 | boleta | `receipt` |
 | sede | `branch` |
-| propietario / administrador / recepción | `owner` / `admin` / `receptionist` |
+| administrador / recepción | `admin` / `receptionist` |
 
 A document lookup (identity-api) answers split names. Pulso stores a person's name as one
 `full_name`, exactly as the web captures it (members, users, day pass customers).
@@ -47,7 +49,7 @@ A document lookup (identity-api) answers split names. Pulso stores a person's na
 Go (version of `go.mod`), **Gin** (HTTP), **pgx v5** (`pgxpool`), **goose** (SQL migrations),
 `log/slog` JSON logs, PostgreSQL (shared container `atm-postgres` on the VPS and
 `atmosfera-postgres` locally; own database `pulso`, own schema `pulso`, own role `pulso_app`).
-JWT HS256 (`golang-jwt/jwt/v5`) and argon2id (`golang.org/x/crypto/argon2`) for auth.
+`golang-jwt/jwt/v5` verifies the RS256 tokens of atm-auth-api (JWKS). There is no password code here.
 `testify` for tests. No ORM. Add a dependency only when needed and say why.
 
 Queries are plain SQL with pgx in `adapters/postgres`. Move to **sqlc** (as `atm-orbita-api`
@@ -108,33 +110,30 @@ services never block the critical path of a request without a timeout.
 
 ## 6. Authentication and authorization (decided with the owner)
 
-**Stateless, deliberately simple.**
+**Identity is atm-auth-api's.** This API has no login, no password, no refresh token and no session.
 
-- `POST /auth/login` with `document_number` (DNI) and `password`. It answers an **access token**.
-- **No refresh token, no sessions table, nothing about sessions in the database.** The web keeps
-  the token **in memory only**; closing or reloading the page loses it and the user signs in
-  again. The token lasts `ACCESS_TOKEN_TTL_SECONDS` (default 8 h, max 24 h).
-- The token carries only `sub` (user id), `pv` (password version), `iat`, `exp`, `iss`.
-  **Role, organization, gym and branches are never in the token**: `auth.Require` loads the
-  user from the database on every request, so deactivating a user, changing a role or changing
-  a password takes effect at once.
-- Changing the password bumps `users.password_version`, which kills every older token, and
-  answers a fresh token so the user stays signed in.
-- Login failures are indistinguishable (unknown DNI, wrong password, inactive user all answer
-  `INVALID_CREDENTIALS`), and an unknown DNI still costs a hash check. After 5 failures in 15
-  minutes a DNI is locked (in memory, not in the database), on top of the per-IP rate limit.
-- Passwords: argon2id, minimum 8 characters.
-
-**Scope.** The `auth.Principal` (user, organization, role, gym, branches) comes only from the
-verified token and the live user record: **never from a body, URL or query**. The roles mirror
-the web's `permissions.ts`:
-
-| Role | Organization | Reaches |
-|---|---|---|
-| `superadmin` | none | everything, read-only |
-| `owner` | its own | every gym and branch of the organization |
-| `admin` | its own | one gym (`gym_id`) and its branches |
-| `receptionist` | its own | the branches in `user_branches` |
+- The web signs in at atm-auth-api (`POST /v1/login` with `system: "pulso"`), refreshes there, and sends
+  the access token as `Authorization: Bearer`. The API verifies it locally: RS256 only, keys from
+  `AUTH_API_URL/.well-known/jwks.json` (cached 10 minutes, refetched on an unknown key id, throttled),
+  `iss == AUTH_ISSUER`, expiry.
+- A **person's** token (`role: user`) must carry `system == AUTH_SYSTEM_CODE` (`pulso`), a `tenant` (the
+  company = the current gym) and a `client`; its `app_role` must be `admin` or `receptionist`. Otherwise
+  `403 NO_ACCESS`. `tenant_ruc` is informational and never required (a company may have no RUC).
+- The **platform superadmin's** token (`role: superadmin`, no system, no company) is accepted only on
+  `/api/v1/admin/*`; a person's token is `403 FORBIDDEN` there, and the superadmin's token is
+  `403 FORBIDDEN` everywhere else. The console is the only client of `/admin`.
+- On every request the `auth.Principal` (user, organization, gym, role, branches) is rebuilt from the
+  verified token and Pulso's own records, **never from a body, URL or query**: the organization by
+  `organizations.auth_client_id`, the gym by `gyms.auth_tenant_id` (both created on first sight, the gym with
+  a default branch), the user by `(gym, auth_user_id)` (created on first sight; the role follows the token).
+  `users.is_active = false` answers `403 USER_INACTIVE`. Deactivating or removing access in the console shows
+  at the next token refresh.
+- Roles: `admin` reaches every branch of the **current gym** and manages its team and rules;
+  `receptionist` reaches the branches in `user_branches`. Switching gym means asking atm-auth-api for a token
+  of another company. The member directory stays organization-wide.
+- The team page calls atm-auth-api's **service members API** with Pulso's service token
+  (`AUTH_CLIENT_SECRET`); Pulso decides who may do what (admins only), atm-auth-api executes. Nothing in
+  Pulso hashes or stores a password.
 
 **Tenant isolation is non-negotiable.** Every query that touches business data filters by
 `organization_id`, taken from the Principal. Repositories take the organization as an explicit
@@ -155,9 +154,9 @@ parameter. The database backs this up with composite foreign keys and `CHECK` co
   Never put a secret in the repo, in a commit or in a log.
 - Document numbers and names are personal data (Peru Law 29733): never log a full document
   number, never log request bodies or headers (they carry tokens and passwords).
-- **There is no seed and no "create superadmin" logic in the application, on purpose.** The
-  first superadmin is inserted by hand, with a statement printed by `scripts/first-superadmin`
-  (see README). Never add code that creates users with known passwords, and never commit one.
+- **There is no seed and no user-creation logic in the application, on purpose.** People and companies are
+  created in atm-auth-api (console-web); Pulso records them when their tokens arrive. Never add code that
+  creates users with known passwords, and never commit one.
 - Tests build their own data (see `docs/testing.md`) and delete it afterwards.
 
 ## 9. Branches and deployment
@@ -187,7 +186,7 @@ is sent in the `Authorization` header, never in a cookie.
 - Verify before saying "done": `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`.
   Integration tests need a migrated PostgreSQL and are skipped without `TEST_DATABASE_URL`;
   run them with: `TEST_DATABASE_URL='postgres://…/pulso_test?sslmode=disable&search_path=pulso' go test -race ./...`
-- Tests never call the real identity API; they use `identity.Fake` or `httptest`.
+- Tests never call the real identity or auth API; they use `identity.Fake`, `authapi.Fake` or `httptest`, and mint RS256 tokens with `testsupport.Tokens`.
 - Tests create the data they need with helpers (`internal/integration/fixtures_test.go` is the
   model) and remove it when they end; nothing is shared and nothing is seeded.
 - Keep changes small and in the layout above. Do not reopen decisions in this file without asking the owner.

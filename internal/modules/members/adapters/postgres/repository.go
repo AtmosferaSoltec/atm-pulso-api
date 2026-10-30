@@ -369,13 +369,13 @@ func (r *Repository) Receipt(ctx context.Context, organizationID, receiptID uuid
 	var number int
 	var issued time.Time
 	var memberID, membershipID, dayPassID *uuid.UUID
-	err := r.pool.QueryRow(ctx, `SELECT r.id, r.kind, r.number, r.issued_on, g.id, COALESCE(g.display_name, g.name), g.tax_id, g.brand_color, g.logo_key,
+	err := r.pool.QueryRow(ctx, `SELECT r.id, r.kind, r.number, r.issued_on, g.id, COALESCE(g.display_name, g.name), g.tax_id, g.brand_color,
 			b.name, b.address, p.amount::text, p.method, p.member_id, p.membership_id, p.day_pass_id
 		FROM receipts r JOIN payments p ON p.receipt_id = r.id AND p.organization_id = r.organization_id
 		JOIN branches b ON b.id = r.branch_id AND b.organization_id = r.organization_id
 		JOIN gyms g ON g.id = b.gym_id AND g.organization_id = b.organization_id
 		WHERE r.id = $1 AND r.organization_id = $2`, receiptID, organizationID).
-		Scan(&d.ID, &kind, &number, &issued, &d.Gym.ID, &d.Gym.Name, &d.Gym.TaxID, &d.Gym.BrandColor, &d.Gym.LogoKey, &d.Branch.Name, &d.Branch.Address,
+		Scan(&d.ID, &kind, &number, &issued, &d.Gym.ID, &d.Gym.Name, &d.Gym.TaxID, &d.Gym.BrandColor, &d.Branch.Name, &d.Branch.Address,
 			&d.Payment.Amount, &d.Payment.Method, &memberID, &membershipID, &dayPassID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return d, domain.ErrReceiptNotFound

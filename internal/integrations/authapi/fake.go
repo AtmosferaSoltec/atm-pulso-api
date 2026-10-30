@@ -31,6 +31,13 @@ func (f *Fake) SetTenant(tenant Tenant) {
 	f.tenants[tenant.ID] = tenant
 }
 
+// SetMember registers a person of a company with a known user id.
+func (f *Fake) SetMember(tenantID string, member Member) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.members[tenantID] = append(f.members[tenantID], member)
+}
+
 // Tenants implements Client.
 func (f *Fake) Tenants(_ context.Context) ([]Tenant, error) {
 	f.mu.Lock()

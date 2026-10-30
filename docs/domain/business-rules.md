@@ -6,50 +6,46 @@ prototype disagree, this file wins; if it is silent, ask the owner.
 
 ## 1. What Pulso is
 
-A multi-tenant administration system for gyms. An **organization** is a client (its owner). It has
-**gyms**, and each gym has **branches** (*sedes*). Members, payments, access control and day passes
-belong to exactly one organization. Everything the user sees is in Spanish; identifiers are English.
+A multi-tenant administration system for gyms. Identity belongs to **atm-auth-api**: an auth *client*
+(the customer) is an **organization**, and each auth *company* of that client with Pulso enabled is a
+**gym**. Each gym has **branches** (*sedes*), created only by Atmósfera. Members, payments, access control
+and day passes belong to exactly one organization. Everything the user sees is in Spanish; identifiers
+are English.
 
 ## 2. Roles and scope  (`features/auth/services/permissions.ts`)
 
-| Role | Created by | Organization | Reaches |
-|---|---|---|---|
-| `superadmin` | inserted by hand (first) / by another superadmin later | none | consults any organization, **read-only** |
-| `owner` | superadmin, together with the client | its own | every gym and branch of the organization |
-| `admin` | the owner | its own | the gyms the owner assigned (one or several, `user_gyms`) and their branches |
-| `receptionist` | the owner, or an admin for the branches of its gyms | its own | only the branches assigned to it |
+| Role | Given by | Reaches |
+|---|---|---|
+| `admin` | the console (superadmin) for the first one; then another admin, through the team page | every branch of the **current gym** (the company of the token) |
+| `receptionist` | an admin | only the branches assigned to it |
+| platform superadmin | atm-auth-api (not a Pulso user) | only `/admin/*`: branches and gym look |
 
-- A person can have only one user: the **DNI is the login** and is unique system-wide.
-- Only the authorized superior may correct a user's DNI: superadmin for owners, owner for
-  admins/receptionists, and admin for receptionists entirely within its gyms. No self-correction.
-  Correction invalidates existing tokens. If a mandatory password change is pending, the temporary
-  password becomes the corrected DNI; otherwise the chosen password remains unchanged.
-- **Only an owner creates admins. An admin only creates receptionists**, and only for branches of
-  its own gyms. Nobody edits their own role or scope; nobody except the superadmin touches an owner.
-- **An owner can have several gyms and decides which ones each admin manages.** An admin has at
-  least one gym and may have all of them or any subset; several admins may share a gym (e.g. with 5
-  gyms: two admins with 2 gyms each and a third with the remaining 1, or one admin over all 5). The
-  owner is the only one who sees everything and creates or reassigns admins; narrowing an admin's gyms
-  takes effect on its next request (the principal is rebuilt from the database every time).
-- Deactivating a user takes effect immediately (already guaranteed by `Authenticate`).
-- **Superadmin is read-only.** It "inspects" one organization at a time: org-scoped endpoints accept
-  the header `X-Organization-Id` **only from a superadmin and only on `GET`**; any write by a
-  superadmin to org data is `403 FORBIDDEN`. This header is the single exception to "scope never
-  comes from the request" and must be validated (the organization must exist).
+- A person has one account in atm-auth-api (the **DNI is the login** there). In Pulso they have one user
+  record **per gym** they work for, with their own role and branches in each. The DNI is unique inside a gym.
+- The role is the `app_role` of the token. Changing it in the console (or from the team page) shows in
+  the next token; Pulso updates its record when it sees the new role.
+- **Only an admin creates users** (admins and receptionists) in the current gym, through the team page.
+  Nobody edits their own role or scope. The DNI cannot be edited (it is the identity in atm-auth-api).
+- A person who already works for another company can only be given a second one by Atmósfera, from
+  the console (`USER_IN_OTHER_COMPANY`). A person with access to several gyms switches gym by asking
+  atm-auth-api for a token of another company.
+- Deactivating a user in Pulso takes effect immediately (`USER_INACTIVE`). Passwords, resets and
+  sessions belong to atm-auth-api.
+- The platform superadmin never touches business data: its token is refused on every route but `/admin/*`.
 
 ### Who sees which screen (the web hides, the API enforces)
 
-| Screen | owner | admin | receptionist | superadmin |
-|---|---|---|---|---|
-| Dashboard (*Resumen*) | yes | yes | no (lands on Access) | inspect |
-| Members | yes | yes | yes | inspect |
-| Access control | yes | yes | yes | inspect (no verify buttons) |
-| Payments list | yes | yes | yes, **without KPIs** | inspect |
-| Gyms and rules (*Gimnasios y reglas*) | all gyms | its gyms | no | inspect |
-| Team (*Usuarios*) | all | receptionists of its gyms + itself | no | inspect |
-| Prices (*Tarifas*) | all gyms | its gyms | no | inspect |
-| Identity (*Identidad*) | all gyms | its gyms | no | inspect |
-| Client panel (*Clientes y gimnasios*) | no | no | no | yes (its own home) |
+| Screen | admin | receptionist |
+|---|---|---|
+| Dashboard (*Resumen*) | yes (current gym) | no (lands on Access) |
+| Members | yes | yes |
+| Access control | yes | yes |
+| Payments list | yes | yes, **without KPIs** |
+| Gym rules (*Gimnasios y reglas*) | its gym | no |
+| Team (*Usuarios*) | its gym | no |
+| Prices (*Tarifas*) | its gym | no |
+
+The gym's identity (name, colour, logo) and its branches are configured by Atmósfera from console-web.
 
 ## 3. Tenancy rules
 
@@ -57,16 +53,19 @@ belong to exactly one organization. Everything the user sees is in Spanish; iden
 - A resource of another organization addressed in a URL answers **404, never 403**. Foreign
   organization references in a request body answer **400 SCOPE_NOT_ALLOWED**; inaccessible scope
   within the same organization answers **403 SCOPE_NOT_ALLOWED**.
-- Branch access: an owner reaches all branches of its organization; an admin the branches of its
-  gyms; a receptionist the assigned ones (`auth.Principal.CanAccessBranch`). **Every endpoint that
-  takes a `branch_id` checks it with that method.**
+- Branch access: an admin reaches the branches of the current gym; a receptionist the assigned ones
+  (`auth.Principal.CanAccessBranch`). **Every endpoint that takes a `branch_id` checks it with that
+  method.**
 
-## 4. Gyms and branches are created only by the superadmin  (`features/platform`)
+## 4. Gyms and branches are created by Atmósfera  (console-web)
 
-- There are no plans, limits or extras in the product: any number of gyms and branches can exist.
-  Commercial terms are handled by Atmósfera outside the system.
-- Owners and admins **cannot** create gyms or branches. Only the superadmin does.
-- The identity of a gym (display name, colour, logo) is also set **only by the superadmin**.
+- There are no plans, limits or extras in the API: any number of gyms and branches can exist.
+  Commercial terms (Atmósfera charges per branch) are handled outside the system.
+- A gym is a company created in console-web with Pulso enabled; Pulso records it by itself, with one
+  default branch "Sede principal". More branches are added by the superadmin
+  (`POST /admin/gyms/{id}/branches`). Gym admins **cannot** create gyms or branches.
+- The identity of a gym (name and RUC from the company, colour from `PATCH /admin/gyms/{id}`, logo from
+  the company profile later) is configured from the console. A company may have no RUC.
 
 ## 5. Gyms and rules  (`features/organization`)
 
@@ -170,13 +169,13 @@ code). The web shows the last entries of the branch. Reason texts are Spanish an
 - A one-time entry: no membership, no member row. Reception only confirms the payment method; **all
   customer data is optional** (document type and number, name, phone) and kept for future promotions.
 - The **price is fixed per gym** (`gyms.day_pass_price`); when the gym has none the default is **15.00**.
-  Only the gym's admin or the owner changes it (screen *Tarifas*). The sale uses the stored price; the
+  Only the gym's admin changes it (screen *Tarifas*). The sale uses the stored price; the
   client cannot choose the amount.
 - A sale, in one transaction, creates: the day pass, a receipt `D-NNNNNN`, a payment (kind
   `day_pass`) and an **allowed access entry** (reason `DAY_PASS`). No ticket is printed.
 - Day passes count in the payments list, in the KPIs ("pases del día") and in the month revenue of the
   dashboard.
-- Sold by any user who can access that branch (owner, admin, receptionist). Default method: cash.
+- Sold by any user who can access that branch (admin, receptionist). Default method: cash.
 
 ## 13. Dashboard  (`features/dashboard`)
 
@@ -187,47 +186,38 @@ For the active branch: **active members** (`active + expiring`, members whose ho
 ## 14. Gym identity  (`features/branding`)
 
 Per gym: `display_name`, `brand_color` (`#rrggbb`, six hex digits, lower case) and a logo. The color
-tints the web (buttons, selected items, receipts). Branches of one gym share the identity. Managed by
-the gym's admin or the owner. Logos and image uploads are deferred until all real functionality is implemented; future storage is Cloudflare R2.
+tints the web (buttons, selected items, receipts). Branches of one gym share the identity. Configured
+by Atmósfera from the console (the gym admin cannot change it). The logo is not served yet: it will come from the company profile in atm-auth-api.
 
 ## 15. Team  (`features/team`)
 
-- Fields: `full_name`, `document_number` (DNI), `role`, `gym_ids` (admins: one or more), `branch_ids` (receptionists),
-  `is_active`, optional `phone` (the user edits it in their profile).
-- A newly created user's initial password is their DNI, hashed with argon2id. Creation accepts no
-  caller-selected password. `must_change_password` is true on creation and manager reset.
-- There is no email recovery. An authorized manager resets the password to the user's DNI, bumps
-  `password_version` to invalidate existing tokens, and requires another password change. The owner
-  manages admins and receptionists; an admin manages receptionists entirely within its gyms; the
-  superadmin manages owners through platform operations.
-- Login with the temporary password returns a restricted token and `must_change_password: true`.
-  Until the password is changed, only `GET /me` and `POST /me/password` are available; every other
-  authenticated endpoint returns `403 PASSWORD_CHANGE_REQUIRED`.
-- Completing a required change clears the flag, invalidates all tokens and returns
-  `{ "data": { "login_required": true } }` without a replacement token. The web returns to login;
-  the user signs in with DNI and their new password before entering the application.
-- The new password has at least 8 characters and differs from the current password. Ordinary
-  voluntary profile password changes retain the existing fresh-token behavior.
-- A receptionist's branches must all belong to gyms the creator controls and there must be at least one.
-- An owner or admin can deactivate and reactivate users, never themselves. Deactivating never deletes
-  history.
-- Who is listed: an owner sees every user of its organization; an admin sees itself and the
-  receptionists of its gyms (all their branches inside gyms the admin manages); nobody sees the
-  superadmin nor other admins.
+- Fields: `full_name`, `document_number` (DNI), `role`, `branch_ids` (receptionists), `is_active`, optional
+  `phone` (the user edits it in their profile).
+- Creating a person calls atm-auth-api (members API of the system, in the current company): the account is
+  created (the DNI is the first password and must be changed at the first login) or, if the DNI already
+  exists, only the access is added. Pulso then records the person and, for a receptionist, the branches.
+  Creation accepts no caller-selected password.
+- There is no email recovery. An admin resets a password (back to the DNI, change required) through
+  atm-auth-api.
+- Changing a role is also applied in atm-auth-api. An admin has no assigned branches (they reach the whole
+  gym); a receptionist needs at least one, all of the current gym.
+- An admin can deactivate and reactivate users, never themselves; this blocks them in Pulso only.
+  Deactivating never deletes history.
+- Who is listed: the people atm-auth-api lets into the current company, merged with Pulso's records
+  (people the console added appear the first time the list is read). If atm-auth-api cannot be reached
+  the list falls back to the people Pulso already knows.
 
-## 16. Platform panel (superadmin)  (`features/platform`)
+## 16. Platform panel (superadmin, in console-web)
 
-- Lists **clients** with: name, gyms (name, RUC) with their branches and whether the client is active; searchable by client, gym or RUC; metrics: clients,
-  gyms, branches, users of clients.
-- Creates a client: the owner (document, first and last names, email, phone, **DNI as temporary password**) and
-  its gyms with branches. **The client's name is the owner's full name.** Adds gyms to a client and
-  branches to a gym. See §4 for the plan limits and the agreement flag.
-- Email and phone of the owner are contact data of the organization; they are not login data.
+- `GET /admin/clients` lists **clients** with their gyms (name, RUC when they have one, colour) and
+  branches; it first records every company with Pulso enabled.
+- The superadmin adds, renames and removes branches (a branch with history, people or that is the last one
+  of its gym cannot be removed: `BRANCH_IN_USE`) and sets a gym's colour.
 
 ## 17. Profile  (`features/auth/components/ProfileDialog.tsx`)
 
-Every user (including the superadmin) sees their data, edits **name and phone**, and changes their
-password (current + new, minimum 8). The DNI, role and scope are read-only in the profile. Already built in API-01.
+Every user sees their data and edits **name and phone**. The DNI, role and scope are read-only, and the
+password is changed in atm-auth-api.
 
 ## 18. Formats and conventions
 

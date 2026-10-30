@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -8,162 +9,198 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/authapi"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/app"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/domain"
 )
 
+// hired registers a person the fake atm-auth-api created, so a token can be minted for them.
+func (h harness) hired(t *testing.T, tn tenant, tenantID uuid.UUID, created response) string {
+	t.Helper()
+	document := created.data()["document_number"].(string)
+	members, err := h.auth.Members(context.Background(), tenantID.String())
+	require.NoError(t, err)
+	for _, m := range members {
+		if m.DNI == document {
+			h.people.Store(document, person{AuthUserID: uuid.MustParse(m.UserID), Document: document, Name: m.FullName, Role: m.Role,
+				ClientID: tn.ClientID, ClientName: tn.OrganizationName, TenantID: tenantID})
+			return document
+		}
+	}
+	require.Failf(t, "not in atm-auth-api", "DNI %s", document)
+	return ""
+}
+
 func TestTeamCreationAndScope(t *testing.T) {
 	h := newHarness(t)
 	tn, other := h.newTenant(t), h.newTenant(t)
-	owner, admin := h.token(t, tn.Owner, demoPassword), h.token(t, tn.Admin, demoPassword)
-	input := app.NewUser{ID: uuid.New(), FullName: "New Admin", DocumentNumber: uniqueDocument(), Role: domain.RoleAdmin, GymIDs: []uuid.UUID{tn.GymOne}}
-	assert.Equal(t, "ROLE_NOT_ASSIGNABLE", h.call(t, http.MethodPost, "/users", admin, input).errorCode())
-	created := h.call(t, http.MethodPost, "/users", owner, input)
-	require.Equal(t, http.StatusCreated, created.status, created.body)
-	assert.Equal(t, created.data(), h.call(t, http.MethodPost, "/users", owner, input).data())
-	token := h.token(t, input.DocumentNumber, input.DocumentNumber)
-	assert.Equal(t, "PASSWORD_CHANGE_REQUIRED", h.call(t, http.MethodGet, "/catalog", token, nil).errorCode())
-	receptionist := app.NewUser{ID: uuid.New(), FullName: "New Reception", DocumentNumber: uniqueDocument(), Role: domain.RoleReceptionist, BranchIDs: []uuid.UUID{other.BranchA}}
-	result := h.call(t, http.MethodPost, "/users", owner, receptionist)
-	assert.Equal(t, 400, result.status)
-	assert.Equal(t, "SCOPE_NOT_ALLOWED", result.errorCode())
-	receptionist.BranchIDs = []uuid.UUID{tn.BranchC}
-	assert.Equal(t, 403, h.call(t, http.MethodPost, "/users", admin, receptionist).status)
-	receptionist.BranchIDs = []uuid.UUID{tn.BranchA}
-	result = h.call(t, http.MethodPost, "/users", admin, receptionist)
-	require.Equal(t, 201, result.status, result.body)
-	receptionist.ID = uuid.New()
-	assert.Equal(t, "USER_DOCUMENT_TAKEN", h.call(t, http.MethodPost, "/users", owner, receptionist).errorCode())
-	for _, document := range []string{tn.Owner, tn.Admin} {
-		token := h.token(t, document, demoPassword)
-		list := h.call(t, http.MethodGet, "/users", token, nil)
-		require.Equal(t, 200, list.status)
-		users, ok := list.body["data"].([]any)
-		require.True(t, ok)
-		for _, raw := range users {
-			user, ok := raw.(map[string]any)
-			require.True(t, ok)
-			assert.NotContains(t, user, "password_hash")
-			if document == tn.Admin {
-				assert.NotEqual(t, "owner", user["role"])
-				if user["role"] == "admin" {
-					assert.Equal(t, tn.AdminID.String(), user["id"])
-				}
+	admin, reception := h.token(t, tn.Admin), h.token(t, tn.Receptionist)
+
+	t.Run("only an admin manages the team", func(t *testing.T) {
+		assert.Equal(t, http.StatusForbidden, h.call(t, http.MethodGet, "/users", reception, nil).status)
+		assert.Equal(t, http.StatusForbidden, h.call(t, http.MethodPost, "/users", reception, app.NewUser{FullName: "Alguien Nuevo", DocumentNumber: uniqueDocument(), Role: domain.RoleAdmin}).status)
+	})
+
+	t.Run("an admin creates another admin and a receptionist", func(t *testing.T) {
+		newAdmin := app.NewUser{FullName: "Nuevo Admin", DocumentNumber: uniqueDocument(), Role: domain.RoleAdmin}
+		created := h.call(t, http.MethodPost, "/users", admin, newAdmin)
+		require.Equal(t, http.StatusCreated, created.status, created.body)
+		assert.Equal(t, "admin", created.data()["role"])
+		assert.Empty(t, created.data()["branches"], "an admin has no assigned branches")
+		assert.Equal(t, false, created.data()["is_self"])
+
+		newReception := app.NewUser{FullName: "Nueva Recepción", DocumentNumber: uniqueDocument(), Role: domain.RoleReceptionist, BranchIDs: []uuid.UUID{tn.BranchA, tn.BranchA}}
+		created = h.call(t, http.MethodPost, "/users", admin, newReception)
+		require.Equal(t, http.StatusCreated, created.status, created.body)
+		assert.Len(t, created.data()["branches"], 1, "a repeated branch is stored once")
+		assert.NotContains(t, created.data(), "password_hash")
+
+		// atm-auth-api got the person with the role; the new receptionist can use Pulso at once.
+		document := h.hired(t, tn, tn.TenantOne, created)
+		me := h.call(t, http.MethodGet, "/me", h.token(t, document), nil)
+		require.Equal(t, http.StatusOK, me.status, me.body)
+		assert.Equal(t, "receptionist", me.data()["role"])
+		assert.Len(t, me.data()["branches"], 1)
+	})
+
+	t.Run("the scope of each role is validated", func(t *testing.T) {
+		base := app.NewUser{FullName: "Persona Prueba", DocumentNumber: uniqueDocument()}
+		cases := []struct {
+			name   string
+			input  app.NewUser
+			status int
+			code   string
+		}{
+			{"unknown role", app.NewUser{FullName: base.FullName, DocumentNumber: base.DocumentNumber, Role: "owner"}, 403, "ROLE_NOT_ASSIGNABLE"},
+			{"admin with branches", app.NewUser{FullName: base.FullName, DocumentNumber: base.DocumentNumber, Role: domain.RoleAdmin, BranchIDs: []uuid.UUID{tn.BranchA}}, 400, "SCOPE_INVALID"},
+			{"receptionist without branches", app.NewUser{FullName: base.FullName, DocumentNumber: base.DocumentNumber, Role: domain.RoleReceptionist}, 400, "BRANCH_REQUIRED"},
+			{"branch of another gym", app.NewUser{FullName: base.FullName, DocumentNumber: base.DocumentNumber, Role: domain.RoleReceptionist, BranchIDs: []uuid.UUID{tn.BranchC}}, 400, "SCOPE_NOT_ALLOWED"},
+			{"branch of another client", app.NewUser{FullName: base.FullName, DocumentNumber: base.DocumentNumber, Role: domain.RoleReceptionist, BranchIDs: []uuid.UUID{other.BranchA}}, 400, "SCOPE_NOT_ALLOWED"},
+			{"bad DNI", app.NewUser{FullName: base.FullName, DocumentNumber: "123", Role: domain.RoleAdmin}, 400, "VALIDATION_FAILED"},
+			{"bad name", app.NewUser{FullName: "x", DocumentNumber: base.DocumentNumber, Role: domain.RoleAdmin}, 400, "VALIDATION_FAILED"},
+		}
+		for _, tc := range cases {
+			res := h.call(t, http.MethodPost, "/users", admin, tc.input)
+			assert.Equal(t, tc.status, res.status, tc.name)
+			got := res.errorCode()
+			if got == "VALIDATION_FAILED" && tc.code != got {
+				got = fieldCode(res)
 			}
+			assert.Equal(t, tc.code, got, tc.name)
 		}
-	}
+		members, err := h.auth.Members(context.Background(), tn.TenantOne.String())
+		require.NoError(t, err)
+		for _, m := range members {
+			assert.NotEqual(t, base.DocumentNumber, m.DNI, "a rejected request never reaches atm-auth-api")
+		}
+	})
+
+	t.Run("atm-auth-api refusals become clear errors", func(t *testing.T) {
+		h.auth.Err = authapi.ErrUnavailable
+		res := h.call(t, http.MethodPost, "/users", admin, app.NewUser{FullName: "Persona Prueba", DocumentNumber: uniqueDocument(), Role: domain.RoleAdmin})
+		assert.Equal(t, http.StatusServiceUnavailable, res.status)
+		assert.Equal(t, "AUTH_UNAVAILABLE", res.errorCode())
+		fallback := h.call(t, http.MethodGet, "/users", admin, nil)
+		assert.Equal(t, http.StatusOK, fallback.status, "the list falls back to the people Pulso already knows")
+		h.auth.Err = nil
+	})
 }
 
-// One owner, several gyms: the owner decides which gyms each admin manages, an admin sees
-// and reaches only those, and an admin can never create another admin.
-func TestAdminManagesSeveralGyms(t *testing.T) {
+func TestTeamListMirrorsAtmAuthApi(t *testing.T) {
 	h := newHarness(t)
-	tn, other := h.newTenant(t), h.newTenant(t)
-	owner := h.token(t, tn.Owner, demoPassword)
+	tn := h.newTenant(t)
+	admin := h.token(t, tn.Admin)
 
-	both := app.NewUser{ID: uuid.New(), FullName: "Admin Dos Gyms", DocumentNumber: uniqueDocument(), Role: domain.RoleAdmin, GymIDs: []uuid.UUID{tn.GymOne, tn.GymTwo, tn.GymTwo}}
-	created := h.call(t, http.MethodPost, "/users", owner, both)
-	require.Equal(t, http.StatusCreated, created.status, created.body)
-	assert.Len(t, created.data()["gyms"], 2, "a repeated gym is stored once")
+	names := func() map[string]map[string]any {
+		list := h.call(t, http.MethodGet, "/users", admin, nil)
+		require.Equal(t, http.StatusOK, list.status, list.body)
+		byDocument := map[string]map[string]any{}
+		for _, raw := range list.body["data"].([]any) {
+			user := raw.(map[string]any)
+			byDocument[user["document_number"].(string)] = user
+		}
+		return byDocument
+	}
+	listed := names()
+	assert.Contains(t, listed, tn.Admin)
+	assert.Contains(t, listed, tn.Receptionist)
+	assert.NotContains(t, listed, tn.AdminTwo, "the other gym's team is not this team")
+	assert.Equal(t, true, listed[tn.Admin]["is_self"])
 
-	invalid := both
-	invalid.ID, invalid.DocumentNumber, invalid.GymIDs = uuid.New(), uniqueDocument(), nil
-	assert.Equal(t, "GYM_REQUIRED", fieldCode(h.call(t, http.MethodPost, "/users", owner, invalid)), "an admin needs at least one gym")
-	invalid.GymIDs = []uuid.UUID{tn.GymOne, other.GymOne}
-	assert.Equal(t, "SCOPE_NOT_ALLOWED", h.call(t, http.MethodPost, "/users", owner, invalid).errorCode(), "a gym of another organization is refused")
-	reception := app.NewUser{ID: uuid.New(), FullName: "Recepcion", DocumentNumber: uniqueDocument(), Role: domain.RoleReceptionist, BranchIDs: []uuid.UUID{tn.BranchA}, GymIDs: []uuid.UUID{tn.GymOne}}
-	assert.Equal(t, "SCOPE_INVALID", fieldCode(h.call(t, http.MethodPost, "/users", owner, reception)), "only admins carry gyms")
+	// Someone the console added is recorded the first time the list is read.
+	added, newcomer := uniqueDocument(), uuid.New()
+	h.auth.SetMember(tn.TenantOne.String(), authapi.Member{UserID: newcomer.String(), DNI: added, FullName: "Agregado Consola", Role: "receptionist", Status: "active"})
+	listed = names()
+	require.Contains(t, listed, added)
+	assert.Equal(t, "receptionist", listed[added]["role"])
+	assert.Empty(t, listed[added]["branches"], "they see nothing until an admin assigns branches")
 
-	token := h.token(t, both.DocumentNumber, both.DocumentNumber)
-	require.Equal(t, 200, h.call(t, http.MethodPost, "/me/password", token, map[string]string{"current_password": both.DocumentNumber, "new_password": "ChangedPassword123!"}).status)
-	admin := h.token(t, both.DocumentNumber, "ChangedPassword123!")
-
-	me := h.call(t, http.MethodGet, "/me", admin, nil)
-	require.Equal(t, 200, me.status, me.body)
-	assert.Len(t, me.data()["gyms"], 2)
-
-	catalog := h.call(t, http.MethodGet, "/catalog", admin, nil)
-	require.Equal(t, 200, catalog.status, catalog.body)
-	for _, raw := range catalog.data()["gyms"].([]any) {
-		for _, b := range raw.(map[string]any)["branches"].([]any) {
-			assert.Equal(t, true, b.(map[string]any)["accessible"], "every branch of both gyms is reachable")
+	// A person disabled in atm-auth-api shows as inactive.
+	h.auth.SetMember(tn.TenantOne.String(), authapi.Member{UserID: uuid.NewString(), DNI: uniqueDocument(), FullName: "Deshabilitado Consola", Role: "admin", Status: "disabled"})
+	disabled := 0
+	for _, user := range names() {
+		if user["is_active"] == false {
+			disabled++
 		}
 	}
+	assert.Equal(t, 1, disabled)
 
-	// An admin never creates another admin, but creates reception for any of its gyms.
-	assert.Equal(t, "ROLE_NOT_ASSIGNABLE", h.call(t, http.MethodPost, "/users", admin, app.NewUser{ID: uuid.New(), FullName: "Otro Admin", DocumentNumber: uniqueDocument(), Role: domain.RoleAdmin, GymIDs: []uuid.UUID{tn.GymOne}}).errorCode())
-	for _, branch := range []uuid.UUID{tn.BranchA, tn.BranchC} {
-		result := h.call(t, http.MethodPost, "/users", admin, app.NewUser{ID: uuid.New(), FullName: "Recepcion", DocumentNumber: uniqueDocument(), Role: domain.RoleReceptionist, BranchIDs: []uuid.UUID{branch}})
-		assert.Equal(t, 201, result.status, result.body)
-	}
-
-	// The owner narrows the admin to one gym: the change takes effect on the next request.
-	narrowed := h.call(t, http.MethodPatch, "/users/"+both.ID.String(), owner, map[string]any{"gym_ids": []uuid.UUID{tn.GymTwo}})
-	require.Equal(t, 200, narrowed.status, narrowed.body)
-	assert.Len(t, narrowed.data()["gyms"], 1)
-	assert.Equal(t, 403, h.call(t, http.MethodPost, "/users", admin, app.NewUser{ID: uuid.New(), FullName: "Recepcion", DocumentNumber: uniqueDocument(), Role: domain.RoleReceptionist, BranchIDs: []uuid.UUID{tn.BranchA}}).status)
-	assert.Equal(t, 200, h.call(t, http.MethodPatch, "/gyms/"+tn.GymTwo.String(), admin, map[string]any{"branch_sharing": true}).status)
-	assert.Equal(t, 403, h.call(t, http.MethodPatch, "/gyms/"+tn.GymOne.String(), admin, map[string]any{"branch_sharing": true}).status)
+	page := h.call(t, http.MethodGet, "/users?page=1&page_size=2", admin, nil)
+	assert.Len(t, page.body["data"], 2)
+	assert.Equal(t, 400, h.call(t, http.MethodGet, "/users?page_size=1000", admin, nil).status)
 }
+
 func TestTeamMutationIsolationAndPasswordReset(t *testing.T) {
 	h := newHarness(t)
 	tn, other := h.newTenant(t), h.newTenant(t)
-	owner := h.token(t, tn.Owner, demoPassword)
-	admin := h.token(t, tn.Admin, demoPassword)
-	reception := h.token(t, tn.Receptionist, demoPassword)
-	super := h.token(t, h.newSuperadmin(t), demoPassword)
-	assert.Equal(t, 200, h.inspect(t, "/users", super, tn.OrganizationID.String()).status)
-	assert.Equal(t, 403, h.call(t, http.MethodGet, "/users", reception, nil).status)
+	admin, adminTwo, reception := h.token(t, tn.Admin), h.token(t, tn.AdminTwo), h.token(t, tn.Receptionist)
+	path := "/users/" + tn.ReceptionistID.String()
+
 	for _, suffix := range []string{"/activate", "/deactivate", "/password"} {
-		assert.Equal(t, 404, h.call(t, http.MethodPost, "/users/"+other.ReceptionistID.String()+suffix, owner, nil).status)
+		assert.Equal(t, 404, h.call(t, http.MethodPost, "/users/"+other.ReceptionistID.String()+suffix, admin, nil).status, "another client")
+		assert.Equal(t, 404, h.call(t, http.MethodPost, path+suffix, adminTwo, nil).status, "another gym of the same client")
 		assert.Equal(t, "CANNOT_MODIFY_SELF", h.call(t, http.MethodPost, "/users/"+tn.AdminID.String()+suffix, admin, nil).errorCode())
-		assert.Equal(t, "CANNOT_MODIFY_SELF", h.call(t, http.MethodPost, "/users/"+tn.OwnerID.String()+suffix, owner, nil).errorCode())
-		assert.Equal(t, "CANNOT_MODIFY_OWNER", h.call(t, http.MethodPost, "/users/"+tn.OwnerID.String()+suffix, admin, nil).errorCode())
-		assert.Equal(t, 403, h.call(t, http.MethodPost, "/users/"+tn.ReceptionistID.String()+suffix, super, nil).status)
 		assert.Equal(t, 403, h.call(t, http.MethodPost, "/users/"+tn.AdminID.String()+suffix, reception, nil).status)
 	}
-	assert.Equal(t, 404, h.call(t, http.MethodPatch, "/users/"+other.ReceptionistID.String(), owner, map[string]string{"full_name": "Other name"}).status)
-	path := "/users/" + tn.ReceptionistID.String()
-	require.Equal(t, 200, h.call(t, http.MethodPost, path+"/password", admin, nil).status)
-	assert.Equal(t, 401, h.call(t, http.MethodGet, "/me", reception, nil).status)
-	temporary := h.token(t, tn.Receptionist, tn.Receptionist)
-	newDNI := uniqueDocument()
-	corrected := h.call(t, http.MethodPatch, path, admin, map[string]string{"document_number": newDNI})
-	require.Equal(t, 200, corrected.status, corrected.body)
-	assert.Equal(t, 401, h.call(t, http.MethodGet, "/me", temporary, nil).status)
-	assert.Equal(t, 401, h.login(t, tn.Receptionist, tn.Receptionist).status)
-	correctedToken := h.token(t, newDNI, newDNI)
-	changed := h.call(t, http.MethodPost, "/me/password", correctedToken, map[string]string{"current_password": newDNI, "new_password": "ChangedPassword123!"})
-	require.Equal(t, 200, changed.status)
-	assert.Equal(t, map[string]any{"login_required": true}, changed.data())
-	active := h.token(t, newDNI, "ChangedPassword123!")
-	secondDNI := uniqueDocument()
-	require.Equal(t, 200, h.call(t, http.MethodPatch, path, admin, map[string]string{"document_number": secondDNI}).status)
-	assert.Equal(t, 401, h.call(t, http.MethodGet, "/me", active, nil).status)
-	chosen := h.token(t, secondDNI, "ChangedPassword123!")
-	require.Equal(t, 200, h.call(t, http.MethodPost, path+"/deactivate", admin, nil).status)
-	assert.Equal(t, 401, h.call(t, http.MethodGet, "/me", chosen, nil).status)
-	require.Equal(t, 200, h.call(t, http.MethodPost, path+"/activate", admin, nil).status)
-	assert.Equal(t, 401, h.call(t, http.MethodGet, "/me", chosen, nil).status)
-	require.Equal(t, 200, h.login(t, secondDNI, "ChangedPassword123!").status)
-}
-func TestPlatformOwnerCorrectionAndReset(t *testing.T) {
-	h := newHarness(t)
-	tn := h.newTenant(t)
-	super := h.token(t, h.newSuperadmin(t), demoPassword)
-	owner := h.token(t, tn.Owner, demoPassword)
-	path := "/clients/" + tn.OrganizationID.String() + "/owner"
-	assert.Equal(t, 403, h.call(t, http.MethodPatch, path, owner, map[string]string{"document_number": uniqueDocument()}).status)
-	assert.Equal(t, 403, h.call(t, http.MethodPost, path+"/password", owner, nil).status)
-	document := uniqueDocument()
-	result := h.call(t, http.MethodPatch, path, super, map[string]string{"document_number": document})
-	require.Equal(t, 200, result.status, result.body)
-	assert.Equal(t, 401, h.call(t, http.MethodGet, "/me", owner, nil).status)
-	token := h.token(t, document, demoPassword)
-	require.Equal(t, 200, h.call(t, http.MethodPost, path+"/password", super, nil).status)
-	assert.Equal(t, 401, h.call(t, http.MethodGet, "/me", token, nil).status)
-	temporary := h.token(t, document, document)
-	assert.Equal(t, "PASSWORD_CHANGE_REQUIRED", h.call(t, http.MethodGet, "/catalog", temporary, nil).errorCode())
+	assert.Equal(t, 404, h.call(t, http.MethodPatch, "/users/"+other.ReceptionistID.String(), admin, map[string]string{"full_name": "Otro Nombre"}).status)
+
+	t.Run("reset password goes to atm-auth-api", func(t *testing.T) {
+		require.Equal(t, 200, h.call(t, http.MethodPost, path+"/password", admin, nil).status)
+		assert.Equal(t, [][2]string{{tn.TenantOne.String(), tn.ReceptionistAuth.String()}}, h.auth.Resets)
+	})
+
+	t.Run("deactivating blocks the person at once, activating restores them", func(t *testing.T) {
+		require.Equal(t, 200, h.call(t, http.MethodPost, path+"/deactivate", admin, nil).status)
+		blocked := h.call(t, http.MethodGet, "/me", reception, nil)
+		assert.Equal(t, 403, blocked.status)
+		assert.Equal(t, "USER_INACTIVE", blocked.errorCode())
+		require.Equal(t, 200, h.call(t, http.MethodPost, path+"/activate", admin, nil).status)
+		assert.Equal(t, 200, h.call(t, http.MethodGet, "/me", reception, nil).status)
+	})
+
+	t.Run("changing the role is applied in atm-auth-api and clears or requires branches", func(t *testing.T) {
+		promoted := h.call(t, http.MethodPatch, path, admin, map[string]any{"role": "admin"})
+		require.Equal(t, 200, promoted.status, promoted.body)
+		assert.Equal(t, "admin", promoted.data()["role"])
+		assert.Empty(t, promoted.data()["branches"])
+		members, err := h.auth.Members(context.Background(), tn.TenantOne.String())
+		require.NoError(t, err)
+		for _, m := range members {
+			if m.UserID == tn.ReceptionistAuth.String() {
+				assert.Equal(t, "admin", m.Role)
+			}
+		}
+		noBranch := h.call(t, http.MethodPatch, path, admin, map[string]any{"role": "receptionist"})
+		assert.Equal(t, "BRANCH_REQUIRED", fieldCode(noBranch))
+		back := h.call(t, http.MethodPatch, path, admin, map[string]any{"role": "receptionist", "branch_ids": []uuid.UUID{tn.BranchB}})
+		require.Equal(t, 200, back.status, back.body)
+		assert.Len(t, back.data()["branches"], 1)
+		renamed := h.call(t, http.MethodPatch, path, admin, map[string]any{"full_name": "  Rosa   Nueva "})
+		require.Equal(t, 200, renamed.status, renamed.body)
+		assert.Equal(t, "Rosa Nueva", renamed.data()["full_name"])
+		assert.Len(t, renamed.data()["branches"], 1, "a rename keeps the branches")
+		assert.Equal(t, 403, h.call(t, http.MethodPatch, path, admin, map[string]any{"role": "owner"}).status)
+	})
 }
 
 // fieldCode is the code of the first validation detail of an error response.

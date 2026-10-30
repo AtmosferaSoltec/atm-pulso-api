@@ -10,9 +10,8 @@ You need Go (see `go.mod`), Docker, and for the web Node and pnpm.
 # Working database (data you keep between runs). Uses the shared local PostgreSQL if it is running.
 docker exec -i atmosfera-postgres psql -v ON_ERROR_STOP=1 -U postgres \
   -v app_password="'a-local-password'" -d postgres < scripts/provision-db.sql
-cp .env.example .env     # DATABASE_URL, JWT_ACCESS_SECRET (openssl rand -base64 48). Leave IDENTITY_API_KEY empty.
+cp .env.example .env     # DATABASE_URL, AUTH_API_URL, AUTH_ISSUER. Leave IDENTITY_API_KEY and AUTH_CLIENT_SECRET empty.
 scripts/dev.sh migrate up
-go run ./scripts/first-superadmin | docker exec -i atmosfera-postgres psql -v ON_ERROR_STOP=1 -U postgres -d pulso
 scripts/dev.sh           # API on http://localhost:3001
 
 # Throwaway database for the tests (they create and delete their own rows; never point them at data you care about)
@@ -43,8 +42,10 @@ Integration tests are skipped without `TEST_DATABASE_URL`; the CI runs them with
 ## Fixtures: tests build their own data
 
 There is no seed. `internal/integration/fixtures_test.go` is the model: `newTenant` inserts an organization
-with two gyms, three branches and one user per role, and removes it when the test ends (cascade);
-`newSuperadmin` does the same for a superadmin; `uniqueDocument()` hands out DNI-shaped numbers nobody else
+(an auth client) with two gyms (auth companies), three branches and three people (an admin per gym and a
+receptionist), and removes it when the test ends (cascade); `h.token(t, dni)` mints the RS256 token
+atm-auth-api would give that person (`testsupport.Tokens` runs a throwaway key and a JWKS server) and
+`h.superToken(t)` the platform superadmin's; `h.auth` is `authapi.Fake`, the stand-in for the service API; `uniqueDocument()` hands out DNI-shaped numbers nobody else
 uses. **Extend these helpers for each new module** (members, payments...) instead of inserting by hand in
 every test. After a full run the test database must be empty: `select count(*) from pulso.organizations`
 is 0. Check it.
@@ -55,8 +56,8 @@ Fix "today" in tests with `clock.Fixed` (Lima date) so status, month revenue and
 
 1. **Happy path** of each endpoint through the real router, checking the exact JSON shape.
 2. **Validation**: every field, with the error `code` and `details`.
-3. **Role matrix**: a table-driven test with every role (superadmin, owner, admin, receptionist) against
-   every endpoint of the plan, asserting allowed or the exact 403/404. The superadmin must be refused on
+3. **Role matrix**: a table-driven test with every role (admin, receptionist, the superadmin's token) against
+   every endpoint of the plan, asserting allowed or the exact 403/404. The superadmin's token must be refused on
    every write.
 4. **Tenant isolation**: create two tenants; with a user of A, try to read and write every resource of B
    by id (path, body, `branch_id`, `gym_id`, `member_id`...): the answer is **404** (or 400 for a body

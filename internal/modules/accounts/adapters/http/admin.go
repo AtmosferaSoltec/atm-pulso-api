@@ -14,6 +14,7 @@ import (
 // because Atmósfera charges for each one.
 func (h *Handler) AdminRoutes(admin gin.IRoutes) {
 	admin.GET("/clients", h.listClients)
+	admin.PATCH("/gyms/:gym_id", h.updateGymIdentity)
 	admin.POST("/gyms/:gym_id/branches", h.addBranch)
 	admin.PATCH("/branches/:id", h.updateBranch)
 	admin.DELETE("/branches/:id", h.deleteBranch)
@@ -32,6 +33,24 @@ func (h *Handler) listClients(c *gin.Context) {
 		return
 	}
 	apierror.OK(c, clients)
+}
+
+func (h *Handler) updateGymIdentity(c *gin.Context) {
+	gymID, ok := pathID(c, "gym_id")
+	if !ok {
+		return
+	}
+	var input app.GymIdentity
+	if !bind(c, &input) {
+		return
+	}
+	gym, err := h.service.UpdateGymIdentity(c.Request.Context(), gymID, input)
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	audit(c, "gym.identity", "gym_id", gymID)
+	apierror.OK(c, gym)
 }
 
 type branchRequest struct {

@@ -33,14 +33,14 @@ func (h harness) memberWith(t *testing.T, token string, branch uuid.UUID, start 
 func TestAccessDecisionsAreServerSideAndLogged(t *testing.T) {
 	h := newHarness(t)
 	tn := h.newTenant(t)
-	owner := h.token(t, tn.Owner, demoPassword)
-	reception := h.token(t, tn.Receptionist, demoPassword)
+	admin := h.token(t, tn.Admin)
+	reception := h.token(t, tn.Receptionist)
 	today := limaToday()
 
-	valid := h.memberWith(t, owner, tn.BranchA, today.AddDate(0, -1, 0), 3, nil)
-	expiring := h.memberWith(t, owner, tn.BranchA, today.AddDate(0, -1, 0), 1, nil)
-	expired := h.memberWith(t, owner, tn.BranchA, today.AddDate(0, -6, 0), 1, nil)
-	future := h.memberWith(t, owner, tn.BranchA, today.AddDate(0, 0, 10), 1, nil)
+	valid := h.memberWith(t, admin, tn.BranchA, today.AddDate(0, -1, 0), 3, nil)
+	expiring := h.memberWith(t, admin, tn.BranchA, today.AddDate(0, -1, 0), 1, nil)
+	expired := h.memberWith(t, admin, tn.BranchA, today.AddDate(0, -6, 0), 1, nil)
+	future := h.memberWith(t, admin, tn.BranchA, today.AddDate(0, 0, 10), 1, nil)
 
 	res := h.check(t, reception, tn.BranchA, valid)
 	require.Equal(t, 200, res.status, res.body)
@@ -70,13 +70,13 @@ func TestAccessDecisionsAreServerSideAndLogged(t *testing.T) {
 func TestAccessBranchRulesAndSharing(t *testing.T) {
 	h := newHarness(t)
 	tn := h.newTenant(t)
-	owner := h.token(t, tn.Owner, demoPassword)
-	reception := h.token(t, tn.Receptionist, demoPassword)
+	admin := h.token(t, tn.Admin)
+	reception := h.token(t, tn.Receptionist)
 	today := limaToday()
 
 	// Gym scope opens A and B; the default scope opens only the home branch.
-	gym := h.memberWith(t, owner, tn.BranchA, today, 3, map[string]any{"access_scope": "gym"})
-	onlyHome := h.memberWith(t, owner, tn.BranchA, today, 3, nil)
+	gym := h.memberWith(t, admin, tn.BranchA, today, 3, map[string]any{"access_scope": "gym"})
+	onlyHome := h.memberWith(t, admin, tn.BranchA, today, 3, nil)
 	assert.Equal(t, true, h.check(t, reception, tn.BranchB, gym).data()["allowed"])
 	denied := h.check(t, reception, tn.BranchB, onlyHome)
 	assert.Equal(t, false, denied.data()["allowed"])
@@ -92,11 +92,9 @@ func TestAccessBranchRulesAndSharing(t *testing.T) {
 	assert.Equal(t, "BRANCH_NOT_ACCESSIBLE", h.check(t, reception, tn.BranchC, gym).errorCode())
 	other := h.newTenant(t)
 	assert.Equal(t, "SCOPE_NOT_ALLOWED", h.check(t, reception, other.BranchA, gym).errorCode())
-	super := h.token(t, h.newSuperadmin(t), demoPassword)
-	assert.Equal(t, 403, h.check(t, super, tn.BranchA, gym).status, "the superadmin only consults")
 
 	// By member id; an unknown id is a 404.
-	list := h.call(t, http.MethodGet, "/members?q="+gym, owner, nil)
+	list := h.call(t, http.MethodGet, "/members?q="+gym, admin, nil)
 	id := list.body["data"].([]any)[0].(map[string]any)["id"].(string)
 	byID := h.call(t, http.MethodPost, "/access/checks", reception, map[string]any{"branch_id": tn.BranchA, "member_id": id})
 	assert.Equal(t, 200, byID.status, byID.body)
@@ -117,35 +115,35 @@ func TestAccessBranchRulesAndSharing(t *testing.T) {
 func TestAccessHistoryAndSummaryRespectReach(t *testing.T) {
 	h := newHarness(t)
 	tn, other := h.newTenant(t), h.newTenant(t)
-	owner := h.token(t, tn.Owner, demoPassword)
-	reception := h.token(t, tn.Receptionist, demoPassword)
-	admin := h.token(t, tn.Admin, demoPassword)
+	admin, adminTwo := h.token(t, tn.Admin), h.token(t, tn.AdminTwo)
+	reception := h.token(t, tn.Receptionist)
 	today := limaToday()
-	member := h.memberWith(t, owner, tn.BranchA, today, 3, map[string]any{"access_scope": "network"})
-	h.check(t, owner, tn.BranchA, member)
-	h.check(t, owner, tn.BranchC, member)
-	h.check(t, owner, tn.BranchA, uniqueDocument())
+	member := h.memberWith(t, admin, tn.BranchA, today, 3, map[string]any{"access_scope": "network"})
+	h.check(t, admin, tn.BranchA, member)
+	h.check(t, adminTwo, tn.BranchC, member)
+	h.check(t, admin, tn.BranchA, uniqueDocument())
 
 	count := func(token, query string) int {
 		res := h.call(t, http.MethodGet, "/access/events"+query, token, nil)
 		require.Equal(t, 200, res.status, res.body)
 		return len(res.body["data"].([]any))
 	}
-	assert.Equal(t, 3, count(owner, ""))
-	assert.Equal(t, 2, count(admin, ""), "an admin sees its gym only")
+	assert.Equal(t, 2, count(admin, ""), "an admin sees the gym of their token only")
+	assert.Equal(t, 1, count(adminTwo, ""), "and the other gym's admin sees theirs")
 	assert.Equal(t, 2, count(reception, ""), "reception sees its branches only")
-	assert.Equal(t, 1, count(owner, "?result=denied"))
-	assert.Equal(t, 2, count(owner, "?result=allowed"))
-	assert.Equal(t, 1, count(owner, "?branch_id="+tn.BranchC.String()))
-	assert.Equal(t, 2, count(owner, "?q="+member), "two entries of that member")
-	assert.Equal(t, 3, count(owner, "?from="+iso(today)+"&to="+iso(today)))
-	assert.Equal(t, 0, count(owner, "?to="+iso(today.AddDate(0, 0, -1))))
+	assert.Equal(t, 1, count(admin, "?result=denied"))
+	assert.Equal(t, 1, count(admin, "?result=allowed"))
+	assert.Equal(t, 1, count(adminTwo, "?branch_id="+tn.BranchC.String()))
+	assert.Equal(t, 1, count(admin, "?q="+member), "one entry of that member in this gym")
+	assert.Equal(t, 2, count(admin, "?from="+iso(today)+"&to="+iso(today)))
+	assert.Equal(t, 0, count(admin, "?to="+iso(today.AddDate(0, 0, -1))))
 	assert.Equal(t, 403, h.call(t, http.MethodGet, "/access/events?branch_id="+tn.BranchC.String(), reception, nil).status)
-	assert.Equal(t, 0, count(h.token(t, other.Owner, demoPassword), ""), "another organization sees nothing")
+	assert.Equal(t, 403, h.call(t, http.MethodGet, "/access/events?branch_id="+tn.BranchC.String(), admin, nil).status, "a branch of the other gym is out of reach")
+	assert.Equal(t, 0, count(h.token(t, other.Admin), ""), "another organization sees nothing")
 
-	summary := h.call(t, http.MethodGet, "/access/summary", owner, nil)
+	summary := h.call(t, http.MethodGet, "/access/summary", admin, nil)
 	require.Equal(t, 200, summary.status, summary.body)
-	assert.Equal(t, 2.0, summary.data()["allowed"])
+	assert.Equal(t, 1.0, summary.data()["allowed"])
 	assert.Equal(t, 1.0, summary.data()["denied"])
 	assert.Equal(t, 0.0, summary.data()["day_passes"])
 }
@@ -153,12 +151,11 @@ func TestAccessHistoryAndSummaryRespectReach(t *testing.T) {
 func TestDayPassSaleIsAtomicAndNumberedSeparately(t *testing.T) {
 	h := newHarness(t)
 	tn, other := h.newTenant(t), h.newTenant(t)
-	owner := h.token(t, tn.Owner, demoPassword)
-	reception := h.token(t, tn.Receptionist, demoPassword)
-	super := h.token(t, h.newSuperadmin(t), demoPassword)
+	admin := h.token(t, tn.Admin)
+	reception := h.token(t, tn.Receptionist)
 
 	// A membership sale uses the R series; the day pass starts its own D series.
-	h.memberWith(t, owner, tn.BranchA, limaToday(), 1, nil)
+	h.memberWith(t, admin, tn.BranchA, limaToday(), 1, nil)
 	res := h.call(t, http.MethodPost, "/day-passes", reception, map[string]any{"branch_id": tn.BranchA, "method": "cash"})
 	require.Equal(t, http.StatusCreated, res.status, res.body)
 	assert.Equal(t, "D-000001", res.data()["receipt"].(map[string]any)["number"])
@@ -191,28 +188,27 @@ func TestDayPassSaleIsAtomicAndNumberedSeparately(t *testing.T) {
 
 	assert.Equal(t, "BRANCH_NOT_ACCESSIBLE", h.call(t, http.MethodPost, "/day-passes", reception, map[string]any{"branch_id": tn.BranchC, "method": "cash"}).errorCode())
 	assert.Equal(t, "SCOPE_NOT_ALLOWED", h.call(t, http.MethodPost, "/day-passes", reception, map[string]any{"branch_id": other.BranchA, "method": "cash"}).errorCode())
-	assert.Equal(t, 403, h.call(t, http.MethodPost, "/day-passes", super, map[string]any{"branch_id": tn.BranchA, "method": "cash"}).status)
 
 	// The list, the detail and the printable receipt (with the visitor) respect the tenant.
-	list := h.call(t, http.MethodGet, "/day-passes", owner, nil)
+	list := h.call(t, http.MethodGet, "/day-passes", admin, nil)
 	assert.Equal(t, 3.0, list.body["meta"].(map[string]any)["total"])
-	assert.Equal(t, 0.0, h.call(t, http.MethodGet, "/day-passes", h.token(t, other.Owner, demoPassword), nil).body["meta"].(map[string]any)["total"])
+	assert.Equal(t, 0.0, h.call(t, http.MethodGet, "/day-passes", h.token(t, other.Admin), nil).body["meta"].(map[string]any)["total"])
 	assert.Equal(t, 200, h.call(t, http.MethodGet, "/day-passes/"+id.String(), reception, nil).status)
-	assert.Equal(t, 404, h.call(t, http.MethodGet, "/day-passes/"+id.String(), h.token(t, other.Owner, demoPassword), nil).status)
+	assert.Equal(t, 404, h.call(t, http.MethodGet, "/day-passes/"+id.String(), h.token(t, other.Admin), nil).status)
 	receipt := h.call(t, http.MethodGet, "/receipts/"+paid.data()["receipt"].(map[string]any)["id"].(string), reception, nil)
 	require.Equal(t, 200, receipt.status, receipt.body)
 	assert.Equal(t, "day_pass", receipt.data()["kind"])
 	assert.Equal(t, "Visita Uno", receipt.data()["member"].(map[string]any)["full_name"])
 	assert.Nil(t, receipt.data()["membership"])
 
-	summary := h.call(t, http.MethodGet, "/access/summary", owner, nil)
+	summary := h.call(t, http.MethodGet, "/access/summary", admin, nil)
 	assert.Equal(t, 3.0, summary.data()["day_passes"])
 }
 
 func TestDayPassNumbersAreGaplessUnderConcurrency(t *testing.T) {
 	h := newHarness(t)
 	tn := h.newTenant(t)
-	reception := h.token(t, tn.Receptionist, demoPassword)
+	reception := h.token(t, tn.Receptionist)
 	const sales = 15
 	numbers := make([]string, sales)
 	var wg sync.WaitGroup

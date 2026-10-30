@@ -20,6 +20,11 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/httpserver"
 )
 
+type stored struct {
+	contentType string
+	data        []byte
+}
+
 // memoryVouchers is the object store in memory: tests never reach Cloudflare.
 type memoryVouchers struct {
 	mu      sync.Mutex
@@ -89,14 +94,13 @@ func (h harness) sellWith(t *testing.T, token string, branch uuid.UUID, method s
 func TestPaymentVouchers(t *testing.T) {
 	h := newHarness(t)
 	tn, other := h.newTenant(t), h.newTenant(t)
-	owner, admin := h.token(t, tn.Owner, demoPassword), h.token(t, tn.Admin, demoPassword)
-	reception := h.token(t, tn.Receptionist, demoPassword)
-	super := h.token(t, h.newSuperadmin(t), demoPassword)
-	foreignOwner := h.token(t, other.Owner, demoPassword)
+	admin, adminTwo := h.token(t, tn.Admin), h.token(t, tn.AdminTwo)
+	reception := h.token(t, tn.Receptionist)
+	foreignAdmin := h.token(t, other.Admin)
 
 	transfer := h.sellWith(t, reception, tn.BranchA, "transfer")
 	cash := h.sellWith(t, reception, tn.BranchA, "cash")
-	elsewhere := h.sellWith(t, owner, tn.BranchC, "yape_plin") // GymTwo: out of the admin's and the receptionist's reach
+	elsewhere := h.sellWith(t, adminTwo, tn.BranchC, "yape_plin") // GymTwo: out of the admin's and the receptionist's reach
 
 	// Cash needs none; the file must be a real image or PDF of a sensible size.
 	res := h.postVoucher(t, reception, cash, proof(0))
@@ -123,7 +127,7 @@ func TestPaymentVouchers(t *testing.T) {
 	assert.Equal(t, 5, h.vouchers.count())
 
 	// Listing and downloading, by everyone who reaches the branch; nobody else sees them.
-	list := h.call(t, http.MethodGet, "/receipts/"+transfer+"/vouchers", owner, nil)
+	list := h.call(t, http.MethodGet, "/receipts/"+transfer+"/vouchers", admin, nil)
 	require.Equal(t, 200, list.status)
 	items, _ := list.body["data"].([]any)
 	require.Len(t, items, 5)
@@ -135,17 +139,16 @@ func TestPaymentVouchers(t *testing.T) {
 	assert.Contains(t, file.Header().Get("Cache-Control"), "private")
 	assert.Equal(t, 401, h.callRaw(t, http.MethodGet, "/vouchers/"+voucher+"/file", "").Code, "never without a session")
 
-	assert.Equal(t, 404, h.call(t, http.MethodGet, "/receipts/"+transfer+"/vouchers", foreignOwner, nil).status, "another client")
-	assert.Equal(t, 404, h.callRaw(t, http.MethodGet, "/vouchers/"+voucher+"/file", foreignOwner).Code)
-	assert.Equal(t, 404, h.postVoucher(t, foreignOwner, transfer, proof(7)).status)
+	assert.Equal(t, 404, h.call(t, http.MethodGet, "/receipts/"+transfer+"/vouchers", foreignAdmin, nil).status, "another client")
+	assert.Equal(t, 404, h.callRaw(t, http.MethodGet, "/vouchers/"+voucher+"/file", foreignAdmin).Code)
+	assert.Equal(t, 404, h.postVoucher(t, foreignAdmin, transfer, proof(7)).status)
 	assert.Equal(t, 404, h.call(t, http.MethodGet, "/receipts/"+elsewhere+"/vouchers", reception, nil).status, "a branch out of reach")
 	assert.Equal(t, 404, h.postVoucher(t, admin, elsewhere, proof(8)).status)
-	assert.Equal(t, 201, h.postVoucher(t, owner, elsewhere, proof(9)).status)
-	assert.Equal(t, 403, h.postVoucher(t, super, transfer, proof(10)).status, "the superadmin only consults")
+	assert.Equal(t, 201, h.postVoucher(t, adminTwo, elsewhere, proof(9)).status)
 
 	// The payments report says how many each payment has.
 	today := iso(limaToday())
-	report := h.call(t, http.MethodGet, "/payments?from="+today+"&to="+today+"&branch_id="+tn.BranchA.String(), owner, nil)
+	report := h.call(t, http.MethodGet, "/payments?from="+today+"&to="+today+"&branch_id="+tn.BranchA.String(), admin, nil)
 	require.Equal(t, 200, report.status, report.body)
 	counts := map[string]float64{}
 	for _, item := range report.body["data"].([]any) {

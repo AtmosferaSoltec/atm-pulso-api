@@ -4,15 +4,15 @@ package integration_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -20,11 +20,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/authapi"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/identity"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/access"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
-	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/adapters/security"
-	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/app"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports"
@@ -34,48 +33,52 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/health"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/httpserver"
-	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/ids"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/middleware"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/testsupport"
 )
 
-const (
-	jwtSecret    = "integration-test-secret-integration-test-secret"
-	demoPassword = "Pulso2026!"
-)
+const systemCode = "pulso"
 
 // harness is the API assembled like cmd/api does, on a migrated database.
 type harness struct {
 	router   *gin.Engine
 	pool     *pgxpool.Pool
-	logos    *memoryLogos
 	vouchers *memoryVouchers
+	// auth plays atm-auth-api's service API (companies and members).
+	auth *authapi.Fake
+	// people are the fixtures a token can be minted for, by DNI.
+	people *sync.Map
+	tokens *testsupport.TokenIssuer
 }
 
 func newHarness(t *testing.T) harness {
 	t.Helper()
 	pool := testsupport.MigratedPool(t)
 
-	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	router, api, err := httpserver.NewRouter(httpserver.Options{Logger: quiet, RateLimitPerMinute: 100_000, BodyLimits: map[string]int64{"PUT " + httpserver.APIPrefix + "/gyms/:gym_id/logo": app.MaxLogoBytes + 1, "POST " + httpserver.APIPrefix + "/receipts/:id/vouchers": vouchersdomain.MaxBytes + 1}})
+	var sink io.Writer = io.Discard
+	if os.Getenv("TEST_LOG") != "" {
+		sink = os.Stderr
+	}
+	quiet := slog.New(slog.NewTextHandler(sink, nil))
+	router, api, err := httpserver.NewRouter(httpserver.Options{Logger: quiet, RateLimitPerMinute: 100_000, BodyLimits: map[string]int64{"POST " + httpserver.APIPrefix + "/receipts/:id/vouchers": vouchersdomain.MaxBytes + 1}})
 	require.NoError(t, err)
 
 	health.Register(api, pool)
 
-	logos, voucherStore := newMemoryLogos(), newMemoryVouchers()
-	accountsModule, err := accounts.New(accounts.Deps{Pool: pool, Clock: clock.System{}, JWTSecret: jwtSecret, AccessTokenTTL: 8 * time.Hour, Logos: logos})
-	require.NoError(t, err)
-	limited := api.Group("", middleware.NewRateLimiter(100_000).Middleware())
-	protected := api.Group("", auth.Require(accountsModule.Authenticator()))
-	accountsModule.Routes(limited, protected)
-	accountsModule.PublicRoutes(api)
+	voucherStore := newMemoryVouchers()
+	authFake := authapi.NewFake()
+	tokens := testsupport.Tokens(t)
+	accountsModule := accounts.New(accounts.Deps{Pool: pool, Clock: clock.System{}, Auth: authFake})
+	guard := auth.NewGuard(auth.NewJWKSVerifier(auth.VerifierConfig{JWKSURL: tokens.JWKSURL, Issuer: testsupport.TestIssuer}), accountsModule.Resolver(), systemCode)
+	protected := api.Group("", guard.User())
+	accountsModule.Routes(protected)
+	accountsModule.AdminRoutes(api.Group("/admin", middleware.NewRateLimiter(100_000).Middleware(), guard.Superadmin()))
 	documents.New(identity.Fake{}).Routes(protected)
-	scope := auth.OrganizationScope(accountsModule.Organizations())
-	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
-	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope)
-	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected, scope)
-	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, scope, middleware.NewRateLimiter(100_000).Middleware())
-	return harness{router: router, pool: pool, logos: logos, vouchers: voucherStore}
+	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected)
+	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, middleware.NewRateLimiter(100_000).Middleware())
+	return harness{router: router, pool: pool, vouchers: voucherStore, auth: authFake, people: &sync.Map{}, tokens: tokens}
 }
 
 type response struct {
@@ -130,216 +133,32 @@ func (h harness) callRaw(t *testing.T, method, path, token string) *httptest.Res
 	return rec
 }
 
-func (h harness) login(t *testing.T, document, password string) response {
+// userClaims are the claims atm-auth-api puts in the token of a person for a company.
+func (h harness) userClaims(p person) map[string]any {
+	return map[string]any{
+		"sub": p.AuthUserID.String(), "role": "user", "system": systemCode,
+		"tenant": p.TenantID.String(), "client": p.ClientID.String(), "client_name": p.ClientName,
+		"app_role": p.Role, "name": p.Name, "dni": p.Document, "tenant_ruc": "20123456789",
+	}
+}
+
+// token mints the access token atm-auth-api would give the fixture person with that DNI.
+func (h harness) token(t *testing.T, document string) string {
 	t.Helper()
-	return h.call(t, http.MethodPost, "/auth/login", "", map[string]string{"document_number": document, "password": password})
+	value, ok := h.people.Load(document)
+	require.True(t, ok, "no fixture person with DNI %s", document)
+	return h.tokens.Mint(t, h.userClaims(value.(person)))
 }
 
-func (h harness) token(t *testing.T, document, password string) string {
+// superToken is the token of the platform administrator (no system, no company).
+func (h harness) superToken(t *testing.T) string {
 	t.Helper()
-	res := h.login(t, document, password)
-	require.Equal(t, http.StatusOK, res.status, "%v", res.body)
-	token, _ := res.data()["access_token"].(string)
-	require.NotEmpty(t, token)
-	return token
-}
-
-func TestLoginAndMeForEveryRole(t *testing.T) {
-	h := newHarness(t)
-	tn := h.newTenant(t)
-	superadmin := h.newSuperadmin(t)
-
-	cases := []struct {
-		name         string
-		document     string
-		role         string
-		organization any
-		gym          any
-		branches     []string
-	}{
-		{"superadmin", superadmin, "superadmin", nil, nil, nil},
-		{"owner", tn.Owner, "owner", tn.OrganizationName, nil, nil},
-		{"admin", tn.Admin, "admin", tn.OrganizationName, tn.GymOneName, nil},
-		{"receptionist", tn.Receptionist, "receptionist", tn.OrganizationName, nil, []string{"Sede A", "Sede B"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			login := h.login(t, tc.document, demoPassword)
-			require.Equal(t, http.StatusOK, login.status, "%v", login.body)
-			assert.Equal(t, "Bearer", login.data()["token_type"])
-			assert.Greater(t, login.data()["expires_in"], float64(0))
-
-			token, _ := login.data()["access_token"].(string)
-			me := h.call(t, http.MethodGet, "/me", token, nil)
-			require.Equal(t, http.StatusOK, me.status)
-			user := me.data()
-			assert.Equal(t, tc.document, user["document_number"])
-			assert.Equal(t, "dni", user["document_type"])
-			assert.Equal(t, tc.role, user["role"])
-			assert.NotContains(t, user, "password_hash", "the hash never leaves the server")
-
-			name := func(key string) any {
-				if v, ok := user[key].(map[string]any); ok {
-					return v["name"]
-				}
-				return nil
-			}
-			assert.Equal(t, tc.organization, name("organization"))
-			var gymNames []any
-			gyms, _ := user["gyms"].([]any)
-			for _, g := range gyms {
-				gymNames = append(gymNames, g.(map[string]any)["name"])
-			}
-			if tc.gym == nil {
-				assert.Empty(t, gymNames, "only admins carry gyms")
-			} else {
-				assert.Equal(t, []any{tc.gym}, gymNames)
-			}
-
-			branches, _ := user["branches"].([]any)
-			var names []string
-			for _, b := range branches {
-				names = append(names, b.(map[string]any)["name"].(string))
-			}
-			assert.Equal(t, tc.branches, names)
-			// The sign-in answer carries the same user as /me.
-			assert.Equal(t, user, login.data()["user"])
-		})
-	}
-}
-
-func TestLoginFailuresAreIndistinguishable(t *testing.T) {
-	h := newHarness(t)
-
-	tn := h.newTenant(t)
-	wrongPassword := h.login(t, tn.Owner, "not-the-password")
-	unknownUser := h.login(t, uniqueDocument(), demoPassword)
-	assert.Equal(t, http.StatusUnauthorized, wrongPassword.status)
-	assert.Equal(t, http.StatusUnauthorized, unknownUser.status)
-	assert.Equal(t, "INVALID_CREDENTIALS", wrongPassword.errorCode())
-	assert.Equal(t, wrongPassword.body["error"], unknownUser.body["error"], "same code, message and details")
-
-	malformed := h.login(t, "abc", "")
-	assert.Equal(t, http.StatusBadRequest, malformed.status)
-	assert.Equal(t, "VALIDATION_FAILED", malformed.errorCode())
-
-	notJSON := h.call(t, http.MethodPost, "/auth/login", "", "not an object")
-	assert.Equal(t, http.StatusBadRequest, notJSON.status)
-}
-
-func TestFiveFailuresLockTheAccountAndTellHowLong(t *testing.T) {
-	h := newHarness(t)
-	document, _ := h.freshUser(t)
-
-	for range 5 {
-		assert.Equal(t, http.StatusUnauthorized, h.login(t, document, "wrong-password").status)
-	}
-	locked := h.login(t, document, demoPassword)
-	assert.Equal(t, http.StatusTooManyRequests, locked.status)
-	assert.Equal(t, "TOO_MANY_ATTEMPTS", locked.errorCode())
-	assert.NotEmpty(t, locked.header.Get("Retry-After"))
-}
-
-func TestPrivateRoutesNeedAValidToken(t *testing.T) {
-	h := newHarness(t)
-
-	for name, token := range map[string]string{
-		"no token":     "",
-		"garbage":      "not-a-token",
-		"wrong secret": mustIssue(t, "another-secret-another-secret-another-secret", uuid.New(), 1, time.Hour),
-		"expired":      mustIssue(t, jwtSecret, uuid.New(), 1, -time.Minute),
-		"unknown user": mustIssue(t, jwtSecret, uuid.New(), 1, time.Hour),
-	} {
-		t.Run(name, func(t *testing.T) {
-			for _, path := range []string{"/me", "/documents/persons/45678912"} {
-				res := h.call(t, http.MethodGet, path, token, nil)
-				assert.Equal(t, http.StatusUnauthorized, res.status, path)
-				assert.Equal(t, "UNAUTHORIZED", res.errorCode())
-			}
-		})
-	}
-
-	t.Run("health stays public", func(t *testing.T) {
-		// Registered by main through platform/health; the router itself must not guard the prefix.
-		res := h.call(t, http.MethodGet, "/nope", "", nil)
-		assert.Equal(t, http.StatusNotFound, res.status)
-		assert.Equal(t, "NOT_FOUND", res.errorCode())
-	})
-}
-
-func mustIssue(t *testing.T, secret string, userID uuid.UUID, version int, ttl time.Duration) string {
-	t.Helper()
-	token, err := security.NewJWT(secret, ttl).Issue(userID, version, time.Now())
-	require.NoError(t, err)
-	return token.Value
-}
-
-func TestDeactivatingAUserCutsAccessAtOnce(t *testing.T) {
-	h := newHarness(t)
-	document, id := h.freshUser(t)
-	token := h.token(t, document, demoPassword)
-	require.Equal(t, http.StatusOK, h.call(t, http.MethodGet, "/me", token, nil).status)
-
-	_, err := h.pool.Exec(context.Background(), `UPDATE users SET is_active = false WHERE id = $1`, id)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusUnauthorized, h.call(t, http.MethodGet, "/me", token, nil).status, "no waiting for the token to expire")
-	assert.Equal(t, http.StatusUnauthorized, h.login(t, document, demoPassword).status)
-}
-
-func TestEditingOwnProfile(t *testing.T) {
-	h := newHarness(t)
-	document, _ := h.freshUser(t)
-	token := h.token(t, document, demoPassword)
-
-	updated := h.call(t, http.MethodPatch, "/me", token, map[string]string{"full_name": "  Nuevo   Nombre  ", "phone": "987654321"})
-	require.Equal(t, http.StatusOK, updated.status, "%v", updated.body)
-	assert.Equal(t, "Nuevo Nombre", updated.data()["full_name"])
-	assert.Equal(t, "987654321", updated.data()["phone"])
-	assert.Equal(t, document, updated.data()["document_number"], "the DNI cannot be edited here")
-
-	again := h.call(t, http.MethodGet, "/me", token, nil)
-	assert.Equal(t, "Nuevo Nombre", again.data()["full_name"])
-
-	cleared := h.call(t, http.MethodPatch, "/me", token, map[string]string{"full_name": "Nuevo Nombre", "phone": ""})
-	require.Equal(t, http.StatusOK, cleared.status)
-	assert.Nil(t, cleared.data()["phone"], "an empty phone is stored as null")
-
-	invalid := h.call(t, http.MethodPatch, "/me", token, map[string]string{"full_name": "x", "phone": "123"})
-	assert.Equal(t, http.StatusBadRequest, invalid.status)
-	assert.Equal(t, "VALIDATION_FAILED", invalid.errorCode())
-	details, _ := invalid.body["error"].(map[string]any)["details"].([]any)
-	assert.Len(t, details, 2)
-}
-
-func TestChangingThePassword(t *testing.T) {
-	h := newHarness(t)
-	document, _ := h.freshUser(t)
-	oldToken := h.token(t, document, demoPassword)
-
-	wrong := h.call(t, http.MethodPost, "/me/password", oldToken, map[string]string{"current_password": "nope", "new_password": "NuevaClave123"})
-	assert.Equal(t, http.StatusBadRequest, wrong.status, "400, so the web does not think the session ended")
-	assert.Equal(t, "CURRENT_PASSWORD_INCORRECT", wrong.errorCode())
-
-	weak := h.call(t, http.MethodPost, "/me/password", oldToken, map[string]string{"current_password": demoPassword, "new_password": "corta"})
-	assert.Equal(t, http.StatusBadRequest, weak.status)
-	assert.Equal(t, "VALIDATION_FAILED", weak.errorCode())
-
-	changed := h.call(t, http.MethodPost, "/me/password", oldToken, map[string]string{"current_password": demoPassword, "new_password": "NuevaClave123"})
-	require.Equal(t, http.StatusOK, changed.status, "%v", changed.body)
-	newToken, _ := changed.data()["access_token"].(string)
-	require.NotEmpty(t, newToken)
-
-	// Immediately, with no waiting: the old token is dead and the new one works.
-	assert.Equal(t, http.StatusUnauthorized, h.call(t, http.MethodGet, "/me", oldToken, nil).status)
-	assert.Equal(t, http.StatusOK, h.call(t, http.MethodGet, "/me", newToken, nil).status)
-	assert.Equal(t, http.StatusUnauthorized, h.login(t, document, demoPassword).status)
-	assert.Equal(t, http.StatusOK, h.login(t, document, "NuevaClave123").status)
+	return h.tokens.Mint(t, map[string]any{"sub": uuid.NewString(), "role": "superadmin"})
 }
 
 func TestDocumentLookups(t *testing.T) {
 	h := newHarness(t)
-	token := h.token(t, h.newTenant(t).Receptionist, demoPassword) // reception may look documents up too
+	token := h.token(t, h.newTenant(t).Receptionist) // reception may look documents up too
 
 	person := h.call(t, http.MethodGet, "/documents/persons/45678912", token, nil)
 	require.Equal(t, http.StatusOK, person.status, "%v", person.body)
@@ -360,35 +179,4 @@ func TestDocumentLookups(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, res.status, path)
 		assert.Equal(t, "VALIDATION_FAILED", res.errorCode(), path)
 	}
-}
-
-// The database itself refuses data that would break the tenancy or role rules, even if
-// a bug in the application tried to write it.
-func TestDatabaseEnforcesTenancyAndRoleRules(t *testing.T) {
-	h := newHarness(t)
-	ctx := context.Background()
-	hash := h.hash(t)
-	tn := h.newTenant(t)
-	other := h.newTenant(t)
-
-	insert := func(document, role string, organization any) error {
-		_, err := h.pool.Exec(ctx, `INSERT INTO users (id, organization_id, document_number, full_name, role, password_hash)
-			VALUES ($1, $2, $3, 'Persona', $4, $5)`, ids.New(), organization, document, role, hash)
-		return err
-	}
-
-	assert.Error(t, insert(uniqueDocument(), "owner", nil), "an owner needs an organization")
-	assert.Error(t, insert(uniqueDocument(), "superadmin", tn.OrganizationID), "the superadmin belongs to no organization")
-	assert.Error(t, insert(uniqueDocument(), "cashier", tn.OrganizationID), "unknown roles are refused")
-	assert.Error(t, insert("1000000", "owner", tn.OrganizationID), "a DNI has eight digits")
-	assert.Error(t, insert(tn.Owner, "owner", tn.OrganizationID), "the DNI is the login: it is unique")
-
-	link := func(userID, gymID, organization uuid.UUID) error {
-		_, err := h.pool.Exec(ctx, `INSERT INTO user_gyms (user_id, gym_id, organization_id) VALUES ($1, $2, $3)`, userID, gymID, organization)
-		return err
-	}
-	assert.Error(t, link(tn.AdminID, other.GymOne, tn.OrganizationID), "an admin cannot manage a gym of another organization")
-	assert.Error(t, link(tn.AdminID, other.GymOne, other.OrganizationID), "nor can a link borrow another organization's id")
-	assert.Error(t, link(tn.AdminID, tn.GymOne, tn.OrganizationID), "the same gym is not linked twice")
-	assert.NoError(t, link(tn.AdminID, tn.GymTwo, tn.OrganizationID), "an admin can manage a second gym of its own organization")
 }

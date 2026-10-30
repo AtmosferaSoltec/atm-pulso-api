@@ -47,5 +47,5 @@ services:
       retries: 3
       start_period: 20s
     security_opt: ["no-new-privileges:true"]
-    # argon2id uses ~19 MiB per login in flight; leave room for a few at once.
+    # Small service: the CSV export is the heaviest request.
     mem_limit: 256m

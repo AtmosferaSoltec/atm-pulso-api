@@ -2,9 +2,7 @@ package integration_test
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
@@ -15,61 +13,38 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
 )
 
-func (h harness) inspect(t *testing.T, path, token, organization string) response {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1"+path, nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-Organization-Id", organization)
-	rec := httptest.NewRecorder()
-	h.router.ServeHTTP(rec, req)
-	out := response{status: rec.Code, header: rec.Header()}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out.body))
-	return out
-}
-
-func TestCatalogAndInspection(t *testing.T) {
+func TestCatalogIsSharedButAccessFollowsTheToken(t *testing.T) {
 	h := newHarness(t)
 	first, second := h.newTenant(t), h.newTenant(t)
 	for _, tc := range []struct {
+		name       string
 		document   string
 		accessible int
-	}{{first.Owner, 3}, {first.Admin, 2}, {first.Receptionist, 2}} {
-		token := h.token(t, tc.document, demoPassword)
-		res := h.inspect(t, "/catalog", token, second.OrganizationID.String())
-		require.Equal(t, http.StatusOK, res.status, res.body)
-		org, ok := res.data()["organization"].(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, first.OrganizationID.String(), org["id"], "other roles cannot override their organization")
-		gyms, ok := res.data()["gyms"].([]any)
-		require.True(t, ok)
-		require.Len(t, gyms, 2)
-		count := 0
-		for _, rawGym := range gyms {
-			gym, ok := rawGym.(map[string]any)
-			require.True(t, ok)
-			assert.Equal(t, "15.00", gym["day_pass_price"])
-			assert.Equal(t, true, gym["day_pass_price_is_default"])
-			branches, ok := gym["branches"].([]any)
-			require.True(t, ok)
-			for _, rawBranch := range branches {
-				branch, ok := rawBranch.(map[string]any)
-				require.True(t, ok)
-				if branch["accessible"] == true {
-					count++
+	}{{"admin of gym one", first.Admin, 2}, {"admin of gym two", first.AdminTwo, 1}, {"receptionist", first.Receptionist, 2}} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := h.call(t, http.MethodGet, "/catalog", h.token(t, tc.document), nil)
+			require.Equal(t, http.StatusOK, res.status, res.body)
+			org := res.data()["organization"].(map[string]any)
+			assert.Equal(t, first.OrganizationID.String(), org["id"])
+			gyms := res.data()["gyms"].([]any)
+			require.Len(t, gyms, 2, "the directory shows every gym of the client")
+			count := 0
+			for _, rawGym := range gyms {
+				gym := rawGym.(map[string]any)
+				assert.Equal(t, "15.00", gym["day_pass_price"])
+				assert.Equal(t, true, gym["day_pass_price_is_default"])
+				assert.Nil(t, gym["logo_url"])
+				for _, rawBranch := range gym["branches"].([]any) {
+					if rawBranch.(map[string]any)["accessible"] == true {
+						count++
+					}
 				}
 			}
-		}
-		assert.Equal(t, tc.accessible, count)
+			assert.Equal(t, tc.accessible, count)
+		})
 	}
-	superToken := h.token(t, h.newSuperadmin(t), demoPassword)
-	for _, tc := range []struct {
-		org    string
-		status int
-	}{{"", 400}, {"invalid", 400}, {uuid.NewString(), 404}, {first.OrganizationID.String(), 200}} {
-		assert.Equal(t, tc.status, h.inspect(t, "/catalog", superToken, tc.org).status)
-	}
-	module, err := accounts.New(accounts.Deps{Pool: h.pool, Clock: clock.System{}, JWTSecret: jwtSecret})
-	require.NoError(t, err)
+
+	module := accounts.New(accounts.Deps{Pool: h.pool, Clock: clock.System{}})
 	branch, sharing, found, err := module.Branches().BranchInfo(context.Background(), first.OrganizationID, first.BranchA)
 	require.NoError(t, err)
 	require.True(t, found)

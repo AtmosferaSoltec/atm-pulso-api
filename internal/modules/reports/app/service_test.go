@@ -43,7 +43,7 @@ func newService(rows int) (*Service, auth.Principal, auth.Principal) {
 		Directory: fakeDirectory{branches: []branchdir.Info{{ID: branch, GymID: gym}}},
 		Clock:     clock.Fixed{At: time.Date(2026, 10, 27, 15, 0, 0, 0, time.UTC)},
 	}
-	return s, auth.Principal{OrganizationID: org, Role: auth.RoleOwner}, auth.Principal{OrganizationID: org, Role: auth.RoleReceptionist, BranchIDs: []uuid.UUID{branch}}
+	return s, auth.Principal{OrganizationID: org, GymID: gym, Role: auth.RoleAdmin}, auth.Principal{OrganizationID: org, Role: auth.RoleReceptionist, BranchIDs: []uuid.UUID{branch}}
 }
 
 func TestExportRefusesMoreThanTheLimitAndReception(t *testing.T) {

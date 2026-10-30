@@ -15,9 +15,8 @@ the sales modules (written through `platform/receipts`); this module only reads 
 `POST /receipts/{id}/vouchers` (the file as the raw body: PNG, JPEG, WebP or PDF, up to 10 MB, checked
 by content), `GET /receipts/{id}/vouchers`, `GET /vouchers/{id}/file`. They are addressed by the receipt
 because that is what the sale returns and what the payments list shows. Reach is the reach of the branch
-where the payment was collected (owner: all, admin: their gyms, reception: their branches); the
-superadmin only consults, with `X-Organization-Id`. The file endpoint needs the token, so the web
-fetches it and shows the bytes: it is never a public link (unlike the gym logo).
+where the payment was collected (admin: the current gym, reception: their branches). The file endpoint needs the token, so the web
+fetches it and shows the bytes: it is never a public link.
 
 ## Rules
 - Cash payments refuse vouchers (`VOUCHER_NOT_FOR_CASH`); other types or sizes: `VOUCHER_TYPE_INVALID`,
@@ -34,5 +33,4 @@ fetches it and shows the bytes: it is never a public link (unlike the gym logo).
 | `VALIDATION_FAILED` | 400 | cash payment, wrong file type, empty or too large file |
 | `VOUCHER_LIMIT_REACHED` | 409 | the payment already has five |
 | `NOT_FOUND` | 404 | no such receipt/voucher in the caller's reach |
-| `FORBIDDEN` | 403 | the superadmin tried to upload |
 | `STORAGE_UNAVAILABLE` | 503 | no object store configured |

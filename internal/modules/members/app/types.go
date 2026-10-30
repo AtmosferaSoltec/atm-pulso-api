@@ -118,13 +118,11 @@ type ReceiptDetail struct {
 	Kind     string    `json:"kind"`
 	IssuedOn string    `json:"issued_on"`
 	Gym      struct {
-		// ID is not sent: it builds the logo address.
 		ID         uuid.UUID `json:"-"`
 		Name       string    `json:"name"`
 		TaxID      *string   `json:"tax_id"`
 		BrandColor string    `json:"brand_color"`
-		// LogoKey is where the logo lives in the object store; clients get LogoURL instead.
-		LogoKey *string `json:"-"`
+		// LogoURL is null until the logo comes from the company profile of atm-auth-api.
 		LogoURL *string `json:"logo_url"`
 	} `json:"gym"`
 	Branch struct {

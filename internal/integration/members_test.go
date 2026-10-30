@@ -35,7 +35,7 @@ func (h harness) enroll(t *testing.T, token string, body map[string]any) respons
 func TestEnrollmentCreatesMemberPeriodReceiptAndPayment(t *testing.T) {
 	h := newHarness(t)
 	tn := h.newTenant(t)
-	reception := h.token(t, tn.Receptionist, demoPassword)
+	reception := h.token(t, tn.Receptionist)
 	document := uniqueDocument()
 
 	res := h.enroll(t, reception, enrollBody(tn.BranchA, document))
@@ -76,49 +76,48 @@ func TestEnrollmentCreatesMemberPeriodReceiptAndPayment(t *testing.T) {
 func TestEnrollmentValidationDuplicatesAndIdempotency(t *testing.T) {
 	h := newHarness(t)
 	tn, other := h.newTenant(t), h.newTenant(t)
-	owner := h.token(t, tn.Owner, demoPassword)
+	admin := h.token(t, tn.Admin)
 	document := uniqueDocument()
 
 	bad := enrollBody(tn.BranchA, "123")
 	bad["phone"], bad["months"], bad["amount"], bad["method"] = "123", 0, "-5", "bitcoin"
-	res := h.enroll(t, owner, bad)
+	res := h.enroll(t, admin, bad)
 	assert.Equal(t, 400, res.status)
 	assert.Equal(t, "VALIDATION_FAILED", res.errorCode())
 	ce := enrollBody(tn.BranchA, "12345678")
 	ce["document_type"] = "ce"
-	assert.Equal(t, 400, h.enroll(t, owner, ce).status, "a CE has 9 to 12 digits")
+	assert.Equal(t, 400, h.enroll(t, admin, ce).status, "a CE has 9 to 12 digits")
 	ce["document_number"] = "123456789"
-	assert.Equal(t, 201, h.enroll(t, owner, ce).status)
+	assert.Equal(t, 201, h.enroll(t, admin, ce).status)
 
 	id := uuid.New()
 	body := enrollBody(tn.BranchA, document)
 	body["id"] = id
-	first := h.enroll(t, owner, body)
+	first := h.enroll(t, admin, body)
 	require.Equal(t, 201, first.status, first.body)
-	again := h.enroll(t, owner, body)
+	again := h.enroll(t, admin, body)
 	assert.Equal(t, 200, again.status, "repeating the same id returns the original sale")
 	assert.Equal(t, first.data()["receipt"], again.data()["receipt"])
 
-	dup := h.enroll(t, owner, enrollBody(tn.BranchB, document))
+	dup := h.enroll(t, admin, enrollBody(tn.BranchB, document))
 	assert.Equal(t, 409, dup.status)
 	assert.Equal(t, "MEMBER_DOCUMENT_TAKEN", dup.errorCode())
 	details := dup.body["error"].(map[string]any)["details"].(map[string]any)
 	assert.Equal(t, id.String(), details["member_id"])
 
 	// The same document in another organization is a different person.
-	assert.Equal(t, 201, h.enroll(t, h.token(t, other.Owner, demoPassword), enrollBody(other.BranchA, document)).status)
+	assert.Equal(t, 201, h.enroll(t, h.token(t, other.Admin), enrollBody(other.BranchA, document)).status)
 
 	// The failed duplicate did not burn a receipt number: the next sale is R-000003 (CE, first, next).
-	next := h.enroll(t, owner, enrollBody(tn.BranchB, uniqueDocument()))
+	next := h.enroll(t, admin, enrollBody(tn.BranchB, uniqueDocument()))
 	assert.Equal(t, "R-000003", next.data()["receipt"].(map[string]any)["number"])
 }
 
 func TestEnrollmentRolesAndTenancy(t *testing.T) {
 	h := newHarness(t)
 	tn, other := h.newTenant(t), h.newTenant(t)
-	reception := h.token(t, tn.Receptionist, demoPassword)
-	admin := h.token(t, tn.Admin, demoPassword)
-	super := h.token(t, h.newSuperadmin(t), demoPassword)
+	reception := h.token(t, tn.Receptionist)
+	admin := h.token(t, tn.Admin)
 
 	res := h.enroll(t, reception, enrollBody(tn.BranchC, uniqueDocument()))
 	assert.Equal(t, 403, res.status)
@@ -127,40 +126,37 @@ func TestEnrollmentRolesAndTenancy(t *testing.T) {
 	foreign := h.enroll(t, reception, enrollBody(other.BranchA, uniqueDocument()))
 	assert.Equal(t, 400, foreign.status)
 	assert.Equal(t, "SCOPE_NOT_ALLOWED", foreign.errorCode())
-	assert.Equal(t, 403, h.enroll(t, super, enrollBody(tn.BranchA, uniqueDocument())).status, "the superadmin only consults")
 
 	sale := h.enroll(t, reception, enrollBody(tn.BranchA, uniqueDocument()))
 	require.Equal(t, 201, sale.status)
 	memberID := sale.data()["member"].(map[string]any)["id"].(string)
 	receiptID := sale.data()["receipt"].(map[string]any)["id"].(string)
-	otherOwner := h.token(t, other.Owner, demoPassword)
+	otherAdmin := h.token(t, other.Admin)
 	for _, path := range []string{"/members/" + memberID, "/members/" + memberID + "/receipts", "/receipts/" + receiptID} {
-		assert.Equal(t, 404, h.call(t, http.MethodGet, path, otherOwner, nil).status, path)
+		assert.Equal(t, 404, h.call(t, http.MethodGet, path, otherAdmin, nil).status, path)
 	}
-	assert.Equal(t, 404, h.call(t, http.MethodPatch, "/members/"+memberID, otherOwner, map[string]string{"full_name": "Hacker Name"}).status)
-	renewal := h.call(t, http.MethodPost, "/members/"+memberID+"/renewals", otherOwner, map[string]any{"branch_id": other.BranchA, "months": 1, "amount": "100", "method": "cash"})
+	assert.Equal(t, 404, h.call(t, http.MethodPatch, "/members/"+memberID, otherAdmin, map[string]string{"full_name": "Hacker Name"}).status)
+	renewal := h.call(t, http.MethodPost, "/members/"+memberID+"/renewals", otherAdmin, map[string]any{"branch_id": other.BranchA, "months": 1, "amount": "100", "method": "cash"})
 	assert.Equal(t, 404, renewal.status)
 
-	// The superadmin may inspect.
-	assert.Equal(t, 200, h.inspect(t, "/members", super, tn.OrganizationID.String()).status)
 	assert.Equal(t, 401, h.call(t, http.MethodGet, "/members", "", nil).status)
 }
 
 func TestAccessBranchesOfAMembership(t *testing.T) {
 	h := newHarness(t)
 	tn := h.newTenant(t)
-	owner := h.token(t, tn.Owner, demoPassword)
+	admin := h.token(t, tn.Admin)
 
 	body := enrollBody(tn.BranchA, uniqueDocument())
 	body["access_scope"] = "gym"
-	res := h.enroll(t, owner, body)
+	res := h.enroll(t, admin, body)
 	require.Equal(t, 201, res.status, res.body)
 	assert.Len(t, res.data()["membership"].(map[string]any)["access_branches"], 2, "gym scope opens A and B")
 
 	body = enrollBody(tn.BranchA, uniqueDocument())
 	body["access_scope"] = "network"
 	body["access_branch_ids"] = []uuid.UUID{tn.BranchA, tn.BranchC}
-	res = h.enroll(t, owner, body)
+	res = h.enroll(t, admin, body)
 	require.Equal(t, 201, res.status, res.body)
 	assert.Len(t, res.data()["membership"].(map[string]any)["access_branches"], 2)
 
@@ -168,7 +164,7 @@ func TestAccessBranchesOfAMembership(t *testing.T) {
 		body = enrollBody(tn.BranchA, uniqueDocument())
 		body["access_scope"] = "gym"
 		body["access_branch_ids"] = ids
-		res = h.enroll(t, owner, body)
+		res = h.enroll(t, admin, body)
 		assert.Equal(t, 400, res.status, name)
 		assert.Equal(t, "ACCESS_BRANCHES_INVALID", res.errorCode(), name)
 	}
@@ -177,14 +173,14 @@ func TestAccessBranchesOfAMembership(t *testing.T) {
 func TestRenewalDatesAndHomeBranch(t *testing.T) {
 	h := newHarness(t)
 	tn := h.newTenant(t)
-	owner := h.token(t, tn.Owner, demoPassword)
+	admin := h.token(t, tn.Admin)
 	today := limaToday()
 
 	// Active member (ends in the future): the renewal starts at the current end.
-	active := h.enroll(t, owner, enrollBody(tn.BranchA, uniqueDocument()))
+	active := h.enroll(t, admin, enrollBody(tn.BranchA, uniqueDocument()))
 	activeID := active.data()["member"].(map[string]any)["id"].(string)
 	currentEnd := active.data()["membership"].(map[string]any)["ends_on"].(string)
-	renewed := h.call(t, http.MethodPost, "/members/"+activeID+"/renewals", owner,
+	renewed := h.call(t, http.MethodPost, "/members/"+activeID+"/renewals", h.token(t, tn.AdminTwo),
 		map[string]any{"branch_id": tn.BranchC, "months": 1, "amount": "100.50", "method": "yape_plin"})
 	require.Equal(t, 201, renewed.status, renewed.body)
 	assert.Equal(t, currentEnd, renewed.data()["membership"].(map[string]any)["starts_on"])
@@ -194,11 +190,11 @@ func TestRenewalDatesAndHomeBranch(t *testing.T) {
 	// Expired member: the renewal starts today.
 	old := enrollBody(tn.BranchA, uniqueDocument())
 	old["starts_on"], old["months"] = iso(today.AddDate(-1, 0, 0)), 1
-	expired := h.enroll(t, owner, old)
+	expired := h.enroll(t, admin, old)
 	require.Equal(t, 201, expired.status, expired.body)
 	assert.Equal(t, "expired", expired.data()["member"].(map[string]any)["status"])
 	expiredID := expired.data()["member"].(map[string]any)["id"].(string)
-	back := h.call(t, http.MethodPost, "/members/"+expiredID+"/renewals", owner, map[string]any{"branch_id": tn.BranchA, "months": 2, "amount": "190", "method": "card"})
+	back := h.call(t, http.MethodPost, "/members/"+expiredID+"/renewals", admin, map[string]any{"branch_id": tn.BranchA, "months": 2, "amount": "190", "method": "card"})
 	require.Equal(t, 201, back.status, back.body)
 	assert.Equal(t, iso(today), back.data()["membership"].(map[string]any)["starts_on"])
 	assert.Equal(t, "active", back.data()["member"].(map[string]any)["status"])
@@ -206,16 +202,16 @@ func TestRenewalDatesAndHomeBranch(t *testing.T) {
 	// Idempotent renewal.
 	periodID := uuid.New()
 	req := map[string]any{"id": periodID, "branch_id": tn.BranchA, "months": 1, "amount": "100", "method": "cash"}
-	assert.Equal(t, 201, h.call(t, http.MethodPost, "/members/"+expiredID+"/renewals", owner, req).status)
-	assert.Equal(t, 200, h.call(t, http.MethodPost, "/members/"+expiredID+"/renewals", owner, req).status)
-	detail := h.call(t, http.MethodGet, "/members/"+expiredID, owner, nil)
+	assert.Equal(t, 201, h.call(t, http.MethodPost, "/members/"+expiredID+"/renewals", admin, req).status)
+	assert.Equal(t, 200, h.call(t, http.MethodPost, "/members/"+expiredID+"/renewals", admin, req).status)
+	detail := h.call(t, http.MethodGet, "/members/"+expiredID, admin, nil)
 	assert.Len(t, detail.data()["memberships"], 3)
 }
 
 func TestMemberListStatusCountsAndFilters(t *testing.T) {
 	h := newHarness(t)
 	tn := h.newTenant(t)
-	owner := h.token(t, tn.Owner, demoPassword)
+	admin := h.token(t, tn.Admin)
 	today := limaToday()
 	add := func(name, branch string, start time.Time, months int) {
 		t.Helper()
@@ -224,42 +220,42 @@ func TestMemberListStatusCountsAndFilters(t *testing.T) {
 		if branch == "b" {
 			body["branch_id"] = tn.BranchB
 		}
-		require.Equal(t, 201, h.enroll(t, owner, body).status)
+		require.Equal(t, 201, h.enroll(t, admin, body).status)
 	}
 	add("Activa Uno", "a", today.AddDate(0, -1, 0), 3)
 	add("Por Vencer", "a", today.AddDate(0, -1, 0), 1)
 	add("Vencida Uno", "b", today.AddDate(0, -6, 0), 1)
 	add("Futura Uno", "a", today.AddDate(0, 0, 10), 1)
 
-	all := h.call(t, http.MethodGet, "/members", owner, nil)
+	all := h.call(t, http.MethodGet, "/members", admin, nil)
 	require.Equal(t, 200, all.status, all.body)
 	counts := all.body["meta"].(map[string]any)["counts"].(map[string]any)
 	assert.Equal(t, map[string]any{"all": 4.0, "active": 1.0, "expiring": 1.0, "expired": 1.0, "scheduled": 1.0}, counts)
 	assert.Equal(t, 4.0, all.body["meta"].(map[string]any)["total"])
 
-	expiring := h.call(t, http.MethodGet, "/members?status=expiring", owner, nil)
+	expiring := h.call(t, http.MethodGet, "/members?status=expiring", admin, nil)
 	assert.Len(t, expiring.body["data"], 1)
 	assert.Equal(t, "Por Vencer", expiring.body["data"].([]any)[0].(map[string]any)["full_name"])
 	assert.Equal(t, 4.0, expiring.body["meta"].(map[string]any)["counts"].(map[string]any)["all"], "counts ignore the status filter")
 
-	search := h.call(t, http.MethodGet, "/members?q=vencida", owner, nil)
+	search := h.call(t, http.MethodGet, "/members?q=vencida", admin, nil)
 	assert.Len(t, search.body["data"], 1)
 	assert.Equal(t, 1.0, search.body["meta"].(map[string]any)["counts"].(map[string]any)["all"], "counts respect the search")
-	assert.Len(t, h.call(t, http.MethodGet, "/members?home_branch_id="+tn.BranchB.String(), owner, nil).body["data"], 1)
-	assert.Len(t, h.call(t, http.MethodGet, "/members?q=%25", owner, nil).body["data"], 0, "wildcards are escaped")
-	assert.Equal(t, 400, h.call(t, http.MethodGet, "/members?status=nope", owner, nil).status)
-	paged := h.call(t, http.MethodGet, "/members?page=2&page_size=3", owner, nil)
+	assert.Len(t, h.call(t, http.MethodGet, "/members?home_branch_id="+tn.BranchB.String(), admin, nil).body["data"], 1)
+	assert.Len(t, h.call(t, http.MethodGet, "/members?q=%25", admin, nil).body["data"], 0, "wildcards are escaped")
+	assert.Equal(t, 400, h.call(t, http.MethodGet, "/members?status=nope", admin, nil).status)
+	paged := h.call(t, http.MethodGet, "/members?page=2&page_size=3", admin, nil)
 	assert.Len(t, paged.body["data"], 1)
 
 	// The directory is shared: reception sees members enrolled in branches it does not work in.
-	reception := h.token(t, tn.Receptionist, demoPassword)
+	reception := h.token(t, tn.Receptionist)
 	assert.Equal(t, 4.0, h.call(t, http.MethodGet, "/members", reception, nil).body["meta"].(map[string]any)["total"])
 }
 
 func TestMemberEditChangesOnlyNameAndPhone(t *testing.T) {
 	h := newHarness(t)
 	tn := h.newTenant(t)
-	reception := h.token(t, tn.Receptionist, demoPassword)
+	reception := h.token(t, tn.Receptionist)
 	document := uniqueDocument()
 	sale := h.enroll(t, reception, enrollBody(tn.BranchA, document))
 	id := sale.data()["member"].(map[string]any)["id"].(string)
@@ -275,7 +271,7 @@ func TestMemberEditChangesOnlyNameAndPhone(t *testing.T) {
 func TestReceiptNumbersAreGaplessUnderConcurrency(t *testing.T) {
 	h := newHarness(t)
 	tn := h.newTenant(t)
-	owner := h.token(t, tn.Owner, demoPassword)
+	admin := h.token(t, tn.Admin)
 	const sales = 20
 	numbers := make([]string, sales)
 	var wg sync.WaitGroup
@@ -283,7 +279,7 @@ func TestReceiptNumbersAreGaplessUnderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res := h.enroll(t, owner, enrollBody(tn.BranchA, uniqueDocument()))
+			res := h.enroll(t, admin, enrollBody(tn.BranchA, uniqueDocument()))
 			if res.status == 201 {
 				numbers[i] = res.data()["receipt"].(map[string]any)["number"].(string)
 			}

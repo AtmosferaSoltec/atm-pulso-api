@@ -4,7 +4,7 @@ What exists today and what each plan adds. PostgreSQL, schema `pulso`, role `pul
 English `snake_case`, plural tables, `TIMESTAMPTZ` in UTC, UUID v7 ids, `NULL` instead of empty
 strings, money `NUMERIC(14,2)`.
 
-**Production already has migrations `00001` and `00002` applied. Never edit them.** All changes are new
+**Production already has migrations `00001` to `00011` applied. Never edit them.** All changes are new
 files `000NN_<module>_<what>.sql` with `Up` and `Down`.
 
 ## Tenant safety, by design
@@ -12,30 +12,29 @@ files `000NN_<module>_<what>.sql` with `Up` and `Down`.
 Every business table carries `organization_id`. To let the **database itself** refuse cross-tenant
 links, parent tables expose `UNIQUE (id, organization_id)` and children use a **composite foreign key**
 `(parent_id, organization_id) REFERENCES parent (id, organization_id)`. The existing example is
-`user_gyms (gym_id, organization_id) -> gyms (id, organization_id)`. Follow it for every new link. Tests must
+`users (gym_id, organization_id) -> gyms (id, organization_id)`. Follow it for every new link. Tests must
 prove that inserting a cross-tenant link fails (see `TestDatabaseEnforcesTenancyAndRoleRules`).
 
-## Existing (API-01)
+## Existing (after migration 00012, central auth)
 
 ```
-organizations (id, name, contact_document_number, contact_name, contact_email, contact_phone, created_at, updated_at)
+organizations (id, name, auth_client_id UNIQUE, created_at, updated_at)       -- an auth Client (the customer)
 gyms          (id, organization_id -> organizations, name, display_name, tax_id, brand_color, day_pass_price,
-               branch_sharing, created_at, updated_at, UNIQUE (id, organization_id))
-branches      (id, gym_id -> gyms, name, address, created_at, updated_at)
-users         (id, organization_id, document_type='dni', document_number UNIQUE, full_name, phone, role,
-               password_hash, password_version, is_active, created_at, updated_at, + role/scope CHECK)
-user_gyms     (user_id, gym_id, organization_id, PK (user_id, gym_id), composite FKs to users and gyms)
-                                                                -- the gyms an admin manages (migration 00010; at least one is an app rule)
-user_branches (user_id -> users, branch_id -> branches)         -- a receptionist's branches
+               branch_sharing, membership_prices, auth_tenant_id UNIQUE, created_at, updated_at,
+               UNIQUE (id, organization_id))                                  -- an auth Company with Pulso enabled
+branches      (id, gym_id, organization_id, name, address, created_at, updated_at)   -- created by the superadmin
+users         (id, organization_id, gym_id, auth_user_id, document_number, full_name, phone, role,
+               is_active, created_at, updated_at, UNIQUE (gym_id, auth_user_id), UNIQUE (gym_id, document_number),
+               role IN ('admin','receptionist'), composite FK (gym_id, organization_id) -> gyms)
+                                                                -- one row per person per gym; no password anywhere
+user_branches (user_id, branch_id, organization_id)             -- a receptionist's branches
 ```
 
-`gyms.tax_id` is the RUC and may repeat between gyms. `gyms.day_pass_price` NULL means "default 15.00".
+`gyms.tax_id` is the RUC; it is NULL when the company has none, and may repeat between gyms. `gyms.day_pass_price` NULL means "default 15.00".
 
 ## API-02 adds
 
-- **`users.must_change_password`**: non-null boolean, false for existing accounts. New users and
-  manager resets set it true. Migration `00003` introduces this state without changing existing
-  passwords. Password updates compare `password_version` to prevent concurrent reset overwrite.
+- ~~`users.must_change_password`~~: dropped by migration 00012 with every other password column (atm-auth-api owns passwords).
 
 
 - **`branches.organization_id`** (NOT NULL, backfilled from the gym; production is empty so it is trivial),
@@ -44,8 +43,7 @@ user_branches (user_id -> users, branch_id -> branches)         -- a receptionis
 - **`user_branches.organization_id`** with composite FKs to `users` and `branches`, so a receptionist can never
   be linked to a branch of another client.
 - ~~`plan_agreements`~~: dropped by migration 00009 (the product has no plans or limits).
-- **`gym_logos`** *(only if the owner approves Q-LOGO)*: `gym_id` PK, `content_type`, `bytes bytea` (max 512 KB),
-  `updated_at`.
+- ~~`gyms.logo_key`~~: dropped by migration 00012; the logo will come from the company profile in atm-auth-api.
 
 ## API-03 adds
 

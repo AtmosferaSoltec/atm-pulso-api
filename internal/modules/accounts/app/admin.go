@@ -21,11 +21,13 @@ type AdminBranch struct {
 
 // AdminGym is a company of a client with Pulso enabled.
 type AdminGym struct {
-	ID           uuid.UUID     `json:"id"`
-	AuthTenantID uuid.UUID     `json:"auth_tenant_id"`
-	RUC          *string       `json:"ruc"`
-	Name         string        `json:"name"`
-	Branches     []AdminBranch `json:"branches"`
+	ID           uuid.UUID `json:"id"`
+	AuthTenantID uuid.UUID `json:"auth_tenant_id"`
+	// RUC is null when the company has none.
+	RUC        *string       `json:"ruc"`
+	Name       string        `json:"name"`
+	BrandColor string        `json:"brand_color"`
+	Branches   []AdminBranch `json:"branches"`
 }
 
 // AdminClient is a customer (an organization) with its gyms.
@@ -34,6 +36,11 @@ type AdminClient struct {
 	AuthClientID uuid.UUID  `json:"auth_client_id"`
 	Name         string     `json:"name"`
 	Gyms         []AdminGym `json:"gyms"`
+}
+
+// GymIdentity is what the superadmin configures about a gym from the console.
+type GymIdentity struct {
+	BrandColor Optional[string] `json:"brand_color"`
 }
 
 // BranchChanges edits a branch.
@@ -45,6 +52,8 @@ type BranchChanges struct {
 // AdminRepository is what the superadmin's view needs.
 type AdminRepository interface {
 	Clients(ctx context.Context) ([]AdminClient, error)
+	// SetGymColor returns domain.ErrResourceNotFound when the gym does not exist.
+	SetGymColor(ctx context.Context, gymID uuid.UUID, color string) (AdminGym, error)
 	// AddBranch returns domain.ErrResourceNotFound when the gym does not exist.
 	AddBranch(ctx context.Context, gymID uuid.UUID, name string, address *string) (AdminBranch, error)
 	UpdateBranch(ctx context.Context, id uuid.UUID, changes BranchChanges) (AdminBranch, error)
@@ -112,6 +121,14 @@ func (s *Service) SyncClients(ctx context.Context) {
 func (s *Service) ListClients(ctx context.Context) ([]AdminClient, error) {
 	s.SyncClients(ctx)
 	return s.Admin.Clients(ctx)
+}
+
+// UpdateGymIdentity sets the look of a gym. Only the superadmin does, from the console.
+func (s *Service) UpdateGymIdentity(ctx context.Context, gymID uuid.UUID, input GymIdentity) (AdminGym, error) {
+	if !input.BrandColor.Set || input.BrandColor.Value == nil || !colorPattern.MatchString(*input.BrandColor.Value) {
+		return AdminGym{}, fieldError("brand_color", "BRAND_COLOR_INVALID")
+	}
+	return s.Admin.SetGymColor(ctx, gymID, *input.BrandColor.Value)
 }
 
 // AddBranch creates a branch in a gym. Only the superadmin does: Atmósfera charges per branch.

@@ -27,7 +27,7 @@ func TestPreflightAllowsTheHeadersTheWebSends(t *testing.T) {
 	allowed := rec.Header().Get("Access-Control-Allow-Headers")
 	// The browser refuses a request whose headers the preflight did not allow: the token,
 	// the JSON body and the superadmin's inspection header must all be there.
-	for _, header := range []string{"Authorization", "Content-Type", "X-Organization-Id"} {
+	for _, header := range []string{"Authorization", "Content-Type"} {
 		assert.Contains(t, allowed, header)
 	}
 	assert.Equal(t, "https://pulso.example", rec.Header().Get("Access-Control-Allow-Origin"))

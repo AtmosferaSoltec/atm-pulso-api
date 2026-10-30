@@ -1,59 +1,45 @@
 # accounts module
 
-Owns **who can sign in and what they can see**: organizations (clients), gyms, branches and
-users, plus login and the user's own profile.
+Owns **who works where**: organizations (the customers of atm-auth-api), gyms (their companies with Pulso
+enabled), branches and the people of each gym. **Identity is not here**: login, passwords and sessions belong
+to atm-auth-api (see AGENTS.md section 6).
 
 ## Tables (it owns them)
-`organizations`, `gyms`, `branches`, `users`, `user_gyms`, `user_branches`. The database enforces the rules
-that must never be broken: an admin's gyms (`user_gyms`, one or several) belong to the admin's organization (composite FK),
-every role has exactly the scope it needs (`CHECK`), and a DNI is unique system-wide.
+`organizations` (`auth_client_id`), `gyms` (`auth_tenant_id`), `branches`, `users` (one row per person per
+gym, `auth_user_id`), `user_branches`. The database enforces the rules that must never be broken: a user's
+gym and a receptionist's branches belong to the user's organization (composite FKs), the role is `admin` or
+`receptionist` (`CHECK`), and a DNI is unique inside a gym.
 
 ## Use cases (`app.Service`)
-`Login`, `Authenticate` (implements `auth.Authenticator` for every private route), `Me`,
-`UpdateProfile`, `ChangePassword`.
+- `Resolve` (implements `auth.Resolver` for every private route): token claims -> organization, gym and user
+  (created on first sight), `ErrNoAccess` / `ErrInactive`.
+- `Me`, `UpdateProfile` (name and phone), `Catalog`, `UpdateGym` (day pass price, branch sharing, membership
+  prices; a gym admin cannot touch the identity).
+- Team (`ListUsers`, `CreateUser`, `UpdateUser`, `SetUserActive`, `ResetUserPassword`): admin only, current gym.
+  The account lives in atm-auth-api, reached through the `Directory` port.
+- Superadmin (`ListClients` with sync, `UpdateGymIdentity`, `AddBranch`, `UpdateBranch`, `DeleteBranch`).
 
 ## Ports (`app/ports.go`)
-`UserRepository`, `PasswordHasher`, `TokenIssuer`, `TokenVerifier`. Implemented by
-`adapters/postgres` and `adapters/security` (argon2id and JWT HS256).
+`TenancyRepository`, `UserRepository`, `TeamRepository`, `GymRepository`, `CatalogRepository`,
+`AdminRepository` (all implemented by `adapters/postgres`) and `Directory` (atm-auth-api, implemented by
+`adapters/authdir` on top of `integrations/authapi`; every failure becomes a domain error).
 
 ## Errors
 | code | status | when |
 |---|---|---|
-| `INVALID_CREDENTIALS` | 401 | unknown DNI, wrong password or inactive user (indistinguishable on purpose) |
-| `TOO_MANY_ATTEMPTS` | 429 | 5 failures in 15 minutes for a DNI; `Retry-After` says how long |
-| `CURRENT_PASSWORD_INCORRECT` | 400 | wrong current password when changing it (400, not 401) |
+| `UNAUTHORIZED` | 401 | missing, invalid or expired token |
+| `NO_ACCESS` | 403 | the token does not open Pulso (other system, unknown role, no company or client) |
+| `USER_INACTIVE` | 403 | the person was deactivated in Pulso |
+| `FORBIDDEN` | 403 | wrong role, wrong kind of token, or identity fields sent by a gym admin |
+| `SCOPE_NOT_ALLOWED` | 403 / 400 | a gym or branch outside the caller's reach (400 when it is not in their organization) |
+| `ROLE_NOT_ASSIGNABLE` | 403 | role other than admin/receptionist, or refused by atm-auth-api |
+| `CANNOT_MODIFY_SELF` | 403 | an admin acting on themselves in the team |
+| `USER_DOCUMENT_TAKEN` | 409 | the DNI already belongs to someone in the gym |
+| `USER_IN_OTHER_COMPANY` | 409 | the person works for another company: only Atmósfera can add them |
+| `BRANCH_IN_USE` | 409 | removing a branch with history, people, or the last of its gym |
+| `AUTH_UNAVAILABLE` | 503 | atm-auth-api did not answer or is not configured |
 | `VALIDATION_FAILED` | 400 | bad fields; `details` lists `{field, code}` |
-| `UNAUTHORIZED` | 401 | missing, invalid or expired token; inactive user; old password version |
 
-## Not here yet
-Creating and managing clients, gyms, branches and team members (plan 02).
-
-## Password onboarding
-
-`must_change_password` is loaded from the live user record and returned in the profile.
-Required changes return `data.login_required = true` without a token. Authentication middleware
-blocks all other routes except reading the profile and changing the password with
-`403 PASSWORD_CHANGE_REQUIRED`. Password updates use an expected version to avoid overwriting
-concurrent manager resets. Product rules are in `docs/domain/business-rules.md` §15.
-
-## Directory and tenancy
-
-`GET /catalog` returns the shared organization directory with effective day-pass prices and
-principal-derived branch accessibility. Superadmin GET inspection requires a validated
-`X-Organization-Id`; other roles cannot override their live organization. `Module.Branches()`
-exposes a structural `BranchInfo` port for future modules. Composite foreign keys enforce branch
-and receptionist tenant isolation. Hash and verification operations share four concurrency slots.
-
-## Gym identity and logo
-
-The identity of a gym (`display_name`, `brand_color`, logo) is set **only by the superadmin**, who may
-change nothing else of the gym; owners and admins change prices and branch sharing but get `403` if
-they send an identity field. The logo is one per gym (repeat the upload for each gym that shares it).
-`PUT /gyms/{id}/logo` takes the raw image (PNG, JPEG or WebP, up to 10 MB, checked by content; SVG is
-refused) and stores it in Cloudflare R2 through the `app.LogoStore` port, implemented by
-`platform/objectstore` through `adapters/logos`. The bucket is private. The database keeps only `gyms.logo_key`;
-the catalog answers `logo_url`, a path like `/gyms/{id}/logo?v=<version>`, and `GET /gyms/{id}/logo` (public, no
-token, because an `<img>` cannot send one) reads the file from R2 and streams it, `immutable` when `v` is the
-current version. Every upload gets a new key (`logos/<gym id>/<uuid>.<ext>`), so files never change, and the
-previous file is deleted afterwards (a failed delete only leaves an orphan file and is logged). Without the
-R2 variables (development) the endpoints answer `503 STORAGE_UNAVAILABLE`.
+## Team and `manage_users`
+The team page calls atm-auth-api's service members API (`/v1/service/members?tenant_id=`) with Pulso's service
+token, so Pulso decides who may manage the team (admins) and no `manage_users` flag is needed for that.
