@@ -38,7 +38,7 @@ func TestMigrationFromGymPricesToPlans(t *testing.T) {
 	base.RawQuery = query.Encode()
 	conn, err := sql.Open("pgx", base.String())
 	require.NoError(t, err)
-	defer conn.Close()
+	t.Cleanup(func() { _ = conn.Close() })
 	conn.SetMaxOpenConns(1) // one session: the search_path and the data stay together
 	migrations, err := fs.Sub(db.Migrations, "migrations")
 	require.NoError(t, err)
@@ -85,7 +85,7 @@ func TestMigrationFromGymPricesToPlans(t *testing.T) {
 		got = append(got, [2]any{months, amount})
 	}
 	require.NoError(t, rows.Err())
-	rows.Close()
+	require.NoError(t, rows.Close())
 	assert.Equal(t, [][2]any{{1, "100.00"}, {3, "270.00"}}, got)
 	var priced int
 	require.NoError(t, conn.QueryRowContext(ctx, `SELECT count(*) FROM membership_plan_prices pr JOIN membership_plans p ON p.id = pr.plan_id WHERE p.gym_id = $1`, withoutPrices).Scan(&priced))
