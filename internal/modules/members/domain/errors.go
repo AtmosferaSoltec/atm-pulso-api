@@ -7,9 +7,9 @@ import (
 )
 
 var (
-	// ErrMemberNotFound: the member does not exist in the organization.
+	// ErrMemberNotFound: the member does not exist in the gym.
 	ErrMemberNotFound = errors.New("member not found")
-	// ErrReceiptNotFound: the receipt does not exist in the organization.
+	// ErrReceiptNotFound: the receipt does not exist in the gym.
 	ErrReceiptNotFound = errors.New("receipt not found")
 	// ErrBranchNotAccessible: the user cannot work in that branch.
 	ErrBranchNotAccessible = errors.New("branch not accessible")

@@ -21,7 +21,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/authapi"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/gymlogo"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/identity"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/storageapi"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/access"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
@@ -46,6 +48,8 @@ type harness struct {
 	vouchers *memoryVouchers
 	// auth plays atm-auth-api's service API (companies and members).
 	auth *authapi.Fake
+	// storage plays atm-storage-api (temporary links of company logos).
+	storage *storageapi.Fake
 	// people are the fixtures a token can be minted for, by DNI.
 	people *sync.Map
 	tokens *testsupport.TokenIssuer
@@ -68,17 +72,19 @@ func newHarness(t *testing.T) harness {
 	voucherStore := newMemoryVouchers()
 	authFake := authapi.NewFake()
 	tokens := testsupport.Tokens(t)
-	accountsModule := accounts.New(accounts.Deps{Pool: pool, Clock: clock.System{}, Auth: authFake})
+	storageFake := storageapi.NewFake()
+	logos := gymlogo.New(authFake, storageFake, quiet)
+	accountsModule := accounts.New(accounts.Deps{Pool: pool, Clock: clock.System{}, Auth: authFake, Logos: logos})
 	guard := auth.NewGuard(auth.NewJWKSVerifier(auth.VerifierConfig{JWKSURL: tokens.JWKSURL, Issuer: testsupport.TestIssuer}), accountsModule.Resolver(), systemCode)
 	protected := api.Group("", guard.User())
 	accountsModule.Routes(protected)
 	accountsModule.AdminRoutes(api.Group("/admin", middleware.NewRateLimiter(100_000).Middleware(), guard.Superadmin()))
 	documents.New(identity.Fake{}).Routes(protected)
-	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	members.New(members.Deps{Pool: pool, Clock: clock.System{}, Logos: logos}).Routes(protected)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
 	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected)
 	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, middleware.NewRateLimiter(100_000).Middleware())
-	return harness{router: router, pool: pool, vouchers: voucherStore, auth: authFake, people: &sync.Map{}, tokens: tokens}
+	return harness{router: router, pool: pool, vouchers: voucherStore, auth: authFake, storage: storageFake, people: &sync.Map{}, tokens: tokens}
 }
 
 type response struct {

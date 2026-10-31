@@ -1,4 +1,4 @@
-// Package branchdir reads the branches and gyms of an organization (tables owned by the
+// Package branchdir reads the branches and gyms of an gym (tables owned by the
 // accounts module) with plain SELECTs, for the modules that sell or check access in a
 // branch. It writes nothing; modules never import each other.
 package branchdir
@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ErrNotFound: the branch is not in the organization.
+// ErrNotFound: the branch is not in the gym.
 var ErrNotFound = errors.New("branch not found")
 
 // DefaultDayPassPrice applies when a gym has not set its own.
@@ -29,7 +29,7 @@ type Info struct {
 	DayPassPrice string
 }
 
-// Reader reads branches of an organization.
+// Reader reads branches of an gym.
 type Reader struct{ pool *pgxpool.Pool }
 
 // New builds the reader.
@@ -37,8 +37,8 @@ func New(pool *pgxpool.Pool) *Reader { return &Reader{pool: pool} }
 
 const selectBranch = `SELECT b.id, b.gym_id, b.name, COALESCE(g.display_name, g.name), g.branch_sharing,
 		COALESCE(g.day_pass_price, $2::numeric)::text
-	FROM branches b JOIN gyms g ON g.id = b.gym_id AND g.organization_id = b.organization_id
-	WHERE b.organization_id = $1`
+	FROM branches b JOIN gyms g ON g.id = b.gym_id
+	WHERE b.gym_id = $1`
 
 func scan(row pgx.Row) (Info, error) {
 	var b Info
@@ -46,18 +46,18 @@ func scan(row pgx.Row) (Info, error) {
 	return b, err
 }
 
-// Branch returns one branch of the organization, or ErrNotFound.
-func (r *Reader) Branch(ctx context.Context, organizationID, branchID uuid.UUID) (Info, error) {
-	b, err := scan(r.pool.QueryRow(ctx, selectBranch+` AND b.id = $3`, organizationID, DefaultDayPassPrice, branchID))
+// Branch returns one branch of the gym, or ErrNotFound.
+func (r *Reader) Branch(ctx context.Context, gymID, branchID uuid.UUID) (Info, error) {
+	b, err := scan(r.pool.QueryRow(ctx, selectBranch+` AND b.id = $3`, gymID, DefaultDayPassPrice, branchID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Info{}, ErrNotFound
 	}
 	return b, err
 }
 
-// Branches returns every branch of the organization.
-func (r *Reader) Branches(ctx context.Context, organizationID uuid.UUID) ([]Info, error) {
-	rows, err := r.pool.Query(ctx, selectBranch+` ORDER BY g.name, b.name, b.id`, organizationID, DefaultDayPassPrice)
+// Branches returns every branch of the gym.
+func (r *Reader) Branches(ctx context.Context, gymID uuid.UUID) ([]Info, error) {
+	rows, err := r.pool.Query(ctx, selectBranch+` ORDER BY g.name, b.name, b.id`, gymID, DefaultDayPassPrice)
 	if err != nil {
 		return nil, err
 	}

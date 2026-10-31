@@ -63,7 +63,7 @@ func TestAccessDecisionsAreServerSideAndLogged(t *testing.T) {
 
 	// Every attempt is logged: 2 allowed + 3 denied + the extra expired repeat = 6 entries.
 	var entries int
-	require.NoError(t, h.pool.QueryRow(t.Context(), `SELECT count(*) FROM access_entries WHERE organization_id=$1`, tn.OrganizationID).Scan(&entries))
+	require.NoError(t, h.pool.QueryRow(t.Context(), `SELECT count(*) FROM access_entries WHERE gym_id=$1`, tn.GymOne).Scan(&entries))
 	assert.Equal(t, 6, entries)
 }
 
@@ -89,7 +89,8 @@ func TestAccessBranchRulesAndSharing(t *testing.T) {
 	assert.Equal(t, true, h.check(t, reception, tn.BranchA, gym).data()["allowed"])
 
 	// Reception can only check in its branches; a foreign branch is a bad reference.
-	assert.Equal(t, "BRANCH_NOT_ACCESSIBLE", h.check(t, reception, tn.BranchC, gym).errorCode())
+	assert.Equal(t, "BRANCH_NOT_ACCESSIBLE", h.check(t, reception, h.extraBranch(t, tn), gym).errorCode(), "a branch of the gym it is not assigned to")
+	assert.Equal(t, "SCOPE_NOT_ALLOWED", h.check(t, reception, tn.BranchC, gym).errorCode(), "a branch of a sibling gym of the same group is foreign")
 	other := h.newTenant(t)
 	assert.Equal(t, "SCOPE_NOT_ALLOWED", h.check(t, reception, other.BranchA, gym).errorCode())
 
@@ -118,9 +119,10 @@ func TestAccessHistoryAndSummaryRespectReach(t *testing.T) {
 	admin, adminTwo := h.token(t, tn.Admin), h.token(t, tn.AdminTwo)
 	reception := h.token(t, tn.Receptionist)
 	today := limaToday()
-	member := h.memberWith(t, admin, tn.BranchA, today, 3, map[string]any{"access_scope": "network"})
+	member := h.memberWith(t, admin, tn.BranchA, today, 3, map[string]any{"access_scope": "gym"})
 	h.check(t, admin, tn.BranchA, member)
-	h.check(t, adminTwo, tn.BranchC, member)
+	denied := h.check(t, adminTwo, tn.BranchC, member)
+	assert.Equal(t, "NOT_REGISTERED", denied.data()["reason"], "a member of a sibling gym is a stranger here")
 	h.check(t, admin, tn.BranchA, uniqueDocument())
 
 	count := func(token, query string) int {
@@ -137,9 +139,10 @@ func TestAccessHistoryAndSummaryRespectReach(t *testing.T) {
 	assert.Equal(t, 1, count(admin, "?q="+member), "one entry of that member in this gym")
 	assert.Equal(t, 2, count(admin, "?from="+iso(today)+"&to="+iso(today)))
 	assert.Equal(t, 0, count(admin, "?to="+iso(today.AddDate(0, 0, -1))))
-	assert.Equal(t, 403, h.call(t, http.MethodGet, "/access/events?branch_id="+tn.BranchC.String(), reception, nil).status)
-	assert.Equal(t, 403, h.call(t, http.MethodGet, "/access/events?branch_id="+tn.BranchC.String(), admin, nil).status, "a branch of the other gym is out of reach")
-	assert.Equal(t, 0, count(h.token(t, other.Admin), ""), "another organization sees nothing")
+	assert.Equal(t, 403, h.call(t, http.MethodGet, "/access/events?branch_id="+h.extraBranch(t, tn).String(), reception, nil).status, "a branch of its gym it is not assigned to")
+	assert.Equal(t, 400, h.call(t, http.MethodGet, "/access/events?branch_id="+tn.BranchC.String(), reception, nil).status)
+	assert.Equal(t, 400, h.call(t, http.MethodGet, "/access/events?branch_id="+tn.BranchC.String(), admin, nil).status, "a branch of the sibling gym is a foreign reference")
+	assert.Equal(t, 0, count(h.token(t, other.Admin), ""), "another group sees nothing")
 
 	summary := h.call(t, http.MethodGet, "/access/summary", admin, nil)
 	require.Equal(t, 200, summary.status, summary.body)
@@ -173,8 +176,8 @@ func TestDayPassSaleIsAtomicAndNumberedSeparately(t *testing.T) {
 
 	// Payment and the allowed entry were created with it.
 	var payments, entries int
-	require.NoError(t, h.pool.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM payments WHERE organization_id=$1 AND kind='day_pass'),
-		(SELECT count(*) FROM access_entries WHERE organization_id=$1 AND reason_code='DAY_PASS')`, tn.OrganizationID).Scan(&payments, &entries))
+	require.NoError(t, h.pool.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM payments WHERE gym_id=$1 AND kind='day_pass'),
+		(SELECT count(*) FROM access_entries WHERE gym_id=$1 AND reason_code='DAY_PASS')`, tn.GymOne).Scan(&payments, &entries))
 	assert.Equal(t, 2, payments)
 	assert.Equal(t, 2, entries)
 
@@ -186,7 +189,8 @@ func TestDayPassSaleIsAtomicAndNumberedSeparately(t *testing.T) {
 	assert.Equal(t, 400, h.call(t, http.MethodPost, "/day-passes", reception, map[string]any{"branch_id": tn.BranchA, "method": "bitcoin"}).status)
 	assert.Equal(t, 400, h.call(t, http.MethodPost, "/day-passes", reception, map[string]any{"branch_id": tn.BranchA, "method": "cash", "visitor": map[string]any{"phone": "12"}}).status)
 
-	assert.Equal(t, "BRANCH_NOT_ACCESSIBLE", h.call(t, http.MethodPost, "/day-passes", reception, map[string]any{"branch_id": tn.BranchC, "method": "cash"}).errorCode())
+	assert.Equal(t, "BRANCH_NOT_ACCESSIBLE", h.call(t, http.MethodPost, "/day-passes", reception, map[string]any{"branch_id": h.extraBranch(t, tn), "method": "cash"}).errorCode())
+	assert.Equal(t, "SCOPE_NOT_ALLOWED", h.call(t, http.MethodPost, "/day-passes", reception, map[string]any{"branch_id": tn.BranchC, "method": "cash"}).errorCode(), "a sibling gym is foreign")
 	assert.Equal(t, "SCOPE_NOT_ALLOWED", h.call(t, http.MethodPost, "/day-passes", reception, map[string]any{"branch_id": other.BranchA, "method": "cash"}).errorCode())
 
 	// The list, the detail and the printable receipt (with the visitor) respect the tenant.

@@ -1,7 +1,6 @@
 package integration_test
 
 import (
-	"context"
 	"net/http"
 	"testing"
 
@@ -17,14 +16,12 @@ import (
 func TestGymJourney(t *testing.T) {
 	h := newHarness(t)
 	client, tenantID := uuid.New(), uuid.New()
-	t.Cleanup(func() {
-		_, _ = h.pool.Exec(context.Background(), `DELETE FROM organizations WHERE auth_client_id = $1`, client)
-	})
+	h.cleanupClient(t, client)
 
 	// 1. In the console a client gets a company with Pulso; the superadmin adds a second branch.
-	h.auth.SetTenant(authapi.Tenant{ID: tenantID.String(), RUC: "20444444444", DisplayName: "Gym Recorrido", ClientID: client.String(), ClientName: "Dueño Recorrido"})
+	h.auth.SetTenant(authapi.Tenant{ID: tenantID.String(), RUC: "20444444444", DisplayName: "Gym Recorrido", ClientID: client.String(), ClientName: "Cliente Recorrido"})
 	super := h.superToken(t)
-	listed := h.call(t, http.MethodGet, "/admin/clients", super, nil)
+	listed := h.call(t, http.MethodGet, "/admin/groups", super, nil)
 	require.Equal(t, 200, listed.status, listed.body)
 	_, gym := gymOfCompany(t, listed, tenantID)
 	require.NotNil(t, gym)
@@ -35,7 +32,7 @@ func TestGymJourney(t *testing.T) {
 	// 2. The console gave a person the admin role: they enter, see both branches and hire reception.
 	adminDNI, adminAuth := uniqueDocument(), uuid.New()
 	h.auth.SetMember(tenantID.String(), authapi.Member{UserID: adminAuth.String(), DNI: adminDNI, FullName: "Ana Admin", Role: "admin", Status: "active"})
-	h.people.Store(adminDNI, person{AuthUserID: adminAuth, Document: adminDNI, Name: "Ana Admin", Role: "admin", ClientID: client, ClientName: "Dueño Recorrido", TenantID: tenantID})
+	h.people.Store(adminDNI, person{AuthUserID: adminAuth, Document: adminDNI, Name: "Ana Admin", Role: "admin", ClientID: client, ClientName: "Cliente Recorrido", TenantID: tenantID})
 	admin := h.token(t, adminDNI)
 	me := h.call(t, http.MethodGet, "/me", admin, nil)
 	require.Equal(t, 200, me.status, me.body)
@@ -44,7 +41,7 @@ func TestGymJourney(t *testing.T) {
 	hired := h.call(t, http.MethodPost, "/users", admin, map[string]any{
 		"full_name": "Rosa Recepción", "document_number": uniqueDocument(), "role": "receptionist", "branch_ids": []string{firstBranch}})
 	require.Equal(t, 201, hired.status, hired.body)
-	tn := tenant{ClientID: client, OrganizationName: "Dueño Recorrido"}
+	tn := tenant{ClientID: client, GroupName: "Cliente Recorrido"}
 	receptionDNI := h.hired(t, tn, tenantID, hired)
 
 	// 3. Reception enrolls a member, checks them in and sells a day pass in its branch only.

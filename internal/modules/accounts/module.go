@@ -1,5 +1,5 @@
-// Package accounts is the module that knows who works where: organizations (the customers of
-// atm-auth-api), gyms (their companies), branches and the people of each gym. Identity itself
+// Package accounts is the module that knows who works where: groups (internal labels that
+// bundle gyms), gyms (the companies of atm-auth-api), branches and the people of each gym. Identity itself
 // (login, passwords, sessions) belongs to atm-auth-api. See README.md.
 package accounts
 
@@ -22,6 +22,8 @@ type Deps struct {
 	Clock clock.Clock
 	// Auth is the service client of atm-auth-api; nil when Pulso has no credential (development).
 	Auth authapi.Client
+	// Logos resolves gym logos; nil when storage is not configured.
+	Logos app.LogoResolver
 }
 
 // Module is the assembled accounts module.
@@ -42,6 +44,7 @@ func New(deps Deps) *Module {
 		Catalogs:  repository,
 		Admin:     repository,
 		Directory: authdir.New(deps.Auth),
+		Logos:     deps.Logos,
 		Clock:     deps.Clock,
 	})
 	return &Module{repository: repository, service: service, handler: accountshttp.NewHandler(service)}

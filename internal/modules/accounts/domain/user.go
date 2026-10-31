@@ -7,7 +7,6 @@ import "github.com/google/uuid"
 // has assigned branches (kept in user_branches).
 type User struct {
 	ID             uuid.UUID
-	OrganizationID uuid.UUID
 	GymID          uuid.UUID
 	AuthUserID     uuid.UUID
 	DocumentNumber string

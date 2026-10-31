@@ -1,6 +1,6 @@
 // Package auth carries who makes the request in the context. Identity belongs to
 // atm-auth-api: this package only checks its tokens and keeps the result. The user, the
-// organization, the gym and the role come from the verified token and the local records
+// group, the gym and the role come from the verified token and the local records
 // built from it, never from a body, URL or query.
 package auth
 
@@ -34,9 +34,10 @@ func (r Role) Valid() bool { return r == RoleAdmin || r == RoleReceptionist }
 // Principal is the authenticated person, rebuilt on every request, so a deactivated user or
 // a changed role takes effect at once.
 type Principal struct {
-	UserID         uuid.UUID
-	OrganizationID uuid.UUID
-	// GymID is the company the token was issued for. Switching gym means asking auth for a token of another one.
+	UserID uuid.UUID
+	// GroupID is the internal group the gym belongs to. Informational: it is never a query filter.
+	GroupID uuid.UUID
+	// GymID is the company the token was issued for and the tenant of every business query. Switching gym means asking auth for a token of another one.
 	GymID uuid.UUID
 	// TenantID is that same company in atm-auth-api.
 	TenantID uuid.UUID
@@ -52,8 +53,8 @@ type BranchRef struct {
 }
 
 // CanAccessBranch says whether the person may work in a branch. An admin reaches every
-// branch of the current gym, reception only the assigned ones. Isolation between organizations
-// is enforced separately: every query filters by organization_id.
+// branch of the current gym, reception only the assigned ones. Isolation between gyms
+// is enforced separately: every query filters by gym_id.
 func (p Principal) CanAccessBranch(branch BranchRef) bool {
 	switch p.Role {
 	case RoleAdmin:

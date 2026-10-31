@@ -41,13 +41,13 @@ Integration tests are skipped without `TEST_DATABASE_URL`; the CI runs them with
 
 ## Fixtures: tests build their own data
 
-There is no seed. `internal/integration/fixtures_test.go` is the model: `newTenant` inserts an organization
-(an auth client) with two gyms (auth companies), three branches and three people (an admin per gym and a
+There is no seed. `internal/integration/fixtures_test.go` is the model: `newTenant` inserts a group
+with two gyms (auth companies of one client), three branches and three people (an admin per gym and a
 receptionist), and removes it when the test ends (cascade); `h.token(t, dni)` mints the RS256 token
 atm-auth-api would give that person (`testsupport.Tokens` runs a throwaway key and a JWKS server) and
 `h.superToken(t)` the platform superadmin's; `h.auth` is `authapi.Fake`, the stand-in for the service API; `uniqueDocument()` hands out DNI-shaped numbers nobody else
 uses. **Extend these helpers for each new module** (members, payments...) instead of inserting by hand in
-every test. After a full run the test database must be empty: `select count(*) from pulso.organizations`
+every test. After a full run the test database must be empty: `select count(*) from pulso.groups`
 is 0. Check it.
 
 Fix "today" in tests with `clock.Fixed` (Lima date) so status, month revenue and "this month" are stable.
@@ -62,7 +62,7 @@ Fix "today" in tests with `clock.Fixed` (Lima date) so status, month revenue and
 4. **Tenant isolation**: create two tenants; with a user of A, try to read and write every resource of B
    by id (path, body, `branch_id`, `gym_id`, `member_id`...): the answer is **404** (or 400 for a body
    reference) and **nothing changed**. A test per endpoint that takes an id.
-5. **Scope inside a tenant**: an admin cannot touch another gym of the same organization; a receptionist
+5. **Scope inside a tenant**: an admin cannot touch another gym of the same group (isolation between gyms); a receptionist
    cannot touch an unassigned branch.
 6. **Idempotency** where the plan says so: repeat a create with the same `id`.
 7. **Concurrency** where numbering or uniqueness is involved: run N goroutines against the same endpoint
@@ -80,5 +80,5 @@ gofmt -l .                      # no output
 go vet ./...
 golangci-lint run               # or: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
 go test -race -count=1 ./...    # with TEST_DATABASE_URL set
-docker exec pulso-test-pg psql -U postgres -d pulso_test -Atc "select count(*) from pulso.organizations"   # 0
+docker exec pulso-test-pg psql -U postgres -d pulso_test -Atc "select count(*) from pulso.groups"   # 0
 ```

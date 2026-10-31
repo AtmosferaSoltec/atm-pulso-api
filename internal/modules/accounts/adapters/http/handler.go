@@ -161,6 +161,8 @@ func respond(c *gin.Context, err error) {
 		apierror.Respond(c, apierror.New(http.StatusConflict, "USER_DOCUMENT_TAKEN", "Este DNI ya pertenece a un usuario."))
 	case errors.Is(err, domain.ErrUserInOtherCompany):
 		apierror.Respond(c, apierror.New(http.StatusConflict, "USER_IN_OTHER_COMPANY", "Esta persona ya trabaja para otra empresa. Pide a Atmósfera que le dé acceso."))
+	case errors.Is(err, domain.ErrGroupInUse):
+		apierror.Respond(c, apierror.New(http.StatusConflict, "GROUP_IN_USE", "El grupo todavía tiene gimnasios."))
 	case errors.Is(err, domain.ErrBranchInUse):
 		apierror.Respond(c, apierror.New(http.StatusConflict, "BRANCH_IN_USE", "La sede tiene movimientos o personas, o es la única del gimnasio."))
 	case errors.Is(err, domain.ErrAuthUnavailable):

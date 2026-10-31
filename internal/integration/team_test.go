@@ -23,7 +23,7 @@ func (h harness) hired(t *testing.T, tn tenant, tenantID uuid.UUID, created resp
 	for _, m := range members {
 		if m.DNI == document {
 			h.people.Store(document, person{AuthUserID: uuid.MustParse(m.UserID), Document: document, Name: m.FullName, Role: m.Role,
-				ClientID: tn.ClientID, ClientName: tn.OrganizationName, TenantID: tenantID})
+				ClientID: tn.ClientID, ClientName: tn.GroupName, TenantID: tenantID})
 			return document
 		}
 	}

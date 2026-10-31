@@ -8,16 +8,10 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 )
 
-// Catalog is the complete directory of the organization; Accessible says which branches the
-// person may operate.
+// Catalog is the current gym with its branches (the only entry of Gyms); Accessible says which
+// branches the person may operate. Other gyms, even of the same group, are never listed.
 type Catalog struct {
-	Organization CatalogName `json:"organization"`
-	Gyms         []Gym       `json:"gyms"`
-}
-
-type CatalogName struct {
-	ID   uuid.UUID `json:"id"`
-	Name string    `json:"name"`
+	Gyms []Gym `json:"gyms"`
 }
 
 type Gym struct {
@@ -29,7 +23,7 @@ type Gym struct {
 	DayPassPrice          string    `json:"day_pass_price"`
 	DayPassPriceIsDefault bool      `json:"day_pass_price_is_default"`
 	BranchSharing         bool      `json:"branch_sharing"`
-	// LogoURL is null until the logo comes from the company profile of atm-auth-api.
+	// LogoURL is a temporary signed address of the logo in the company profile; null when none.
 	LogoURL *string `json:"logo_url"`
 	// MembershipPrices is the gym's base price per duration, ordered by months.
 	MembershipPrices []MembershipPrice `json:"membership_prices"`
@@ -53,14 +47,15 @@ type CatalogRepository interface {
 	Catalog(context.Context, uuid.UUID) (Catalog, error)
 }
 
-// Catalog gives every role the shared directory while deriving access from the live principal.
+// Catalog gives every role the gym's directory while deriving access from the live principal.
 func (s *Service) Catalog(ctx context.Context, principal auth.Principal) (Catalog, error) {
-	catalog, err := s.Catalogs.Catalog(ctx, principal.OrganizationID)
+	catalog, err := s.Catalogs.Catalog(ctx, principal.GymID)
 	if err != nil {
 		return Catalog{}, err
 	}
 	for gi := range catalog.Gyms {
 		gym := &catalog.Gyms[gi]
+		gym.LogoURL = s.logoOf(ctx, principal)
 		for bi := range gym.Branches {
 			branch := &gym.Branches[bi]
 			branch.Accessible = principal.CanAccessBranch(auth.BranchRef{ID: branch.ID, GymID: gym.ID})

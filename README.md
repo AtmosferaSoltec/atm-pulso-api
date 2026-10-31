@@ -17,13 +17,13 @@ asking on every request.
 
 | In atm-auth-api (console) | In Pulso |
 |---|---|
-| **Client** (the customer) | **Organization**: owns the shared member directory |
-| **Company** (tenant) of that client with Pulso enabled | **Gym**; the token's company is the *current gym* |
+| **Client** (the customer) | Only a hint: its companies start in the same **Group** (an internal label of the superadmin, not a user, no owner) |
+| **Company** (tenant) of that client with Pulso enabled | **Gym** (a brand); the token's company is the *current gym*. Members, payments and receipts belong to the gym; nothing is shared between gyms |
 | Person with access to the company, role `admin` or `receptionist` | **User** of that gym (one record per person per gym) |
-| Platform superadmin | `/admin/*` only: branches and gym look |
+| Platform superadmin | `/admin/*` only: groups, gym look and group, branches |
 
-Organizations, gyms (with a default branch "Sede principal") and users are recorded the first time a
-token for them is seen; the superadmin's `GET /admin/clients` also syncs every company with Pulso
+Groups, gyms (with a default branch "Sede principal") and users are recorded the first time a
+token for them is seen; the superadmin's `GET /admin/groups` also syncs every company with Pulso
 enabled. Branches are created **only by the superadmin from console-web** (Atmósfera charges per branch);
 a gym admin can never add one. Roles: `admin` (every branch of the current gym, team, prices) and
 `receptionist` (assigned branches). The team page uses atm-auth-api's *service* members API with Pulso's own
@@ -47,7 +47,7 @@ a test fails if the code and the contract differ. By area:
 | Access | `POST /access/checks`, `GET /access/events`, `GET /access/summary` | admin, reception |
 | Day passes | `/day-passes`, `/day-passes/{id}` | admin, reception |
 | Reports | `GET /payments`, `/payments/export`, `/dashboard` | admin (reception: the list without totals) |
-| Platform | `GET /admin/clients`, `PATCH /admin/gyms/{id}`, `POST /admin/gyms/{id}/branches`, `PATCH`/`DELETE /admin/branches/{id}` | superadmin (console-web) |
+| Platform | `GET`/`POST /admin/groups`, `PATCH`/`DELETE /admin/groups/{id}`, `PATCH /admin/gyms/{id}`, `POST /admin/gyms/{id}/branches`, `PATCH`/`DELETE /admin/branches/{id}` | superadmin (console-web) |
 
 Carné de extranjería has no lookup (`atm-identity-api` only resolves DNI and RUC): the web keeps
 it manual.
@@ -66,13 +66,16 @@ docker exec -i atmosfera-postgres psql -v ON_ERROR_STOP=1 -U postgres \
 cp .env.example .env        # fill DATABASE_URL (same password), AUTH_API_URL and AUTH_ISSUER of your
                             # local atm-auth-api. Leave IDENTITY_API_KEY and AUTH_CLIENT_SECRET empty:
                             # lookups answer invented data and company names fall back to the RUC.
+                            # With AUTH_CLIENT_SECRET set, STORAGE_API_URL (atm-storage-api) lets /me, /catalog and
+                            # receipts carry logo_url; `scripts/dev-all.sh start` brings the whole local stack up
+                            # (auth :3130, storage :8084, identity :8086, pulso-api :3001, web :5173, console :5174).
 
 # 3. Migrate and run
 scripts/dev.sh migrate up
 scripts/dev.sh                        # http://localhost:3001/api/v1/health
 ```
 
-There is **no seed and no user table to fill**: the database starts empty and organizations, gyms and
+There is **no seed and no user table to fill**: the database starts empty and groups, gyms and
 people appear when atm-auth-api's tokens reach the API. To try the API without atm-auth-api, mint tokens
 the way the integration tests do (`internal/platform/testsupport/tokens.go`).
 

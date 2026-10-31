@@ -13,22 +13,22 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/tx"
 )
 
-// Clients lists every organization with its gyms and branches.
-func (r *Repository) Clients(ctx context.Context) ([]app.AdminClient, error) {
-	clients := []app.AdminClient{}
-	byOrg := map[uuid.UUID]int{}
-	rows, err := r.pool.Query(ctx, `SELECT id, auth_client_id, name FROM organizations ORDER BY name, id`)
+// Groups lists every group with its gyms and branches.
+func (r *Repository) Groups(ctx context.Context) ([]app.AdminGroup, error) {
+	groups := []app.AdminGroup{}
+	byGroup := map[uuid.UUID]int{}
+	rows, err := r.pool.Query(ctx, `SELECT id, name FROM groups ORDER BY name, id`)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
-		client := app.AdminClient{Gyms: []app.AdminGym{}}
-		if err := rows.Scan(&client.ID, &client.AuthClientID, &client.Name); err != nil {
+		group := app.AdminGroup{Gyms: []app.AdminGym{}}
+		if err := rows.Scan(&group.ID, &group.Name); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		byOrg[client.ID] = len(clients)
-		clients = append(clients, client)
+		byGroup[group.ID] = len(groups)
+		groups = append(groups, group)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -36,20 +36,19 @@ func (r *Repository) Clients(ctx context.Context) ([]app.AdminClient, error) {
 	}
 
 	gymIndex := map[uuid.UUID][2]int{}
-	rows, err = r.pool.Query(ctx, `SELECT id, organization_id, auth_tenant_id, tax_id, name, brand_color FROM gyms ORDER BY name, id`)
+	rows, err = r.pool.Query(ctx, `SELECT id, group_id, auth_tenant_id, auth_client_id, tax_id, name, brand_color FROM gyms ORDER BY name, id`)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		gym := app.AdminGym{Branches: []app.AdminBranch{}}
-		var org uuid.UUID
-		if err := rows.Scan(&gym.ID, &org, &gym.AuthTenantID, &gym.RUC, &gym.Name, &gym.BrandColor); err != nil {
+		if err := rows.Scan(&gym.ID, &gym.GroupID, &gym.AuthTenantID, &gym.AuthClientID, &gym.RUC, &gym.Name, &gym.BrandColor); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		oi := byOrg[org]
-		gymIndex[gym.ID] = [2]int{oi, len(clients[oi].Gyms)}
-		clients[oi].Gyms = append(clients[oi].Gyms, gym)
+		gi := byGroup[gym.GroupID]
+		gymIndex[gym.ID] = [2]int{gi, len(groups[gi].Gyms)}
+		groups[gi].Gyms = append(groups[gi].Gyms, gym)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -68,17 +67,76 @@ func (r *Repository) Clients(ctx context.Context) ([]app.AdminClient, error) {
 			return nil, err
 		}
 		at := gymIndex[gymID]
-		clients[at[0]].Gyms[at[1]].Branches = append(clients[at[0]].Gyms[at[1]].Branches, branch)
+		groups[at[0]].Gyms[at[1]].Branches = append(groups[at[0]].Gyms[at[1]].Branches, branch)
 	}
-	return clients, rows.Err()
+	return groups, rows.Err()
 }
 
-// SetGymColor sets the brand colour of a gym and returns the gym with its branches.
-func (r *Repository) SetGymColor(ctx context.Context, gymID uuid.UUID, color string) (app.AdminGym, error) {
+// CreateGroup stores an empty group.
+func (r *Repository) CreateGroup(ctx context.Context, name string) (app.AdminGroup, error) {
+	group := app.AdminGroup{ID: ids.New(), Name: name, Gyms: []app.AdminGym{}}
+	_, err := r.pool.Exec(ctx, `INSERT INTO groups (id, name) VALUES ($1, $2)`, group.ID, name)
+	return group, err
+}
+
+// RenameGroup changes the name of a group and returns it with its gyms.
+func (r *Repository) RenameGroup(ctx context.Context, id uuid.UUID, name string) (app.AdminGroup, error) {
+	tag, err := r.pool.Exec(ctx, `UPDATE groups SET name = $2, updated_at = now() WHERE id = $1`, id, name)
+	if err != nil {
+		return app.AdminGroup{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return app.AdminGroup{}, domain.ErrResourceNotFound
+	}
+	groups, err := r.Groups(ctx)
+	if err != nil {
+		return app.AdminGroup{}, err
+	}
+	for _, g := range groups {
+		if g.ID == id {
+			return g, nil
+		}
+	}
+	return app.AdminGroup{}, domain.ErrResourceNotFound
+}
+
+// DeleteGroup removes a group that has no gyms.
+func (r *Repository) DeleteGroup(ctx context.Context, id uuid.UUID) error {
+	return (tx.Runner{Pool: r.pool}).Run(ctx, func(t pgx.Tx) error {
+		var one int
+		if err := t.QueryRow(ctx, `SELECT 1 FROM groups WHERE id = $1 FOR UPDATE`, id).Scan(&one); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.ErrResourceNotFound
+			}
+			return err
+		}
+		var used bool
+		if err := t.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM gyms WHERE group_id = $1)`, id).Scan(&used); err != nil {
+			return err
+		}
+		if used {
+			return domain.ErrGroupInUse
+		}
+		_, err := t.Exec(ctx, `DELETE FROM groups WHERE id = $1`, id)
+		return err
+	})
+}
+
+// UpdateGymIdentity sets the colour and/or the group of a gym and returns the gym with its branches.
+func (r *Repository) UpdateGymIdentity(ctx context.Context, gymID uuid.UUID, color *string, groupID *uuid.UUID) (app.AdminGym, error) {
 	gym := app.AdminGym{Branches: []app.AdminBranch{}}
-	err := r.pool.QueryRow(ctx, `UPDATE gyms SET brand_color = $2, updated_at = now() WHERE id = $1
-		RETURNING id, auth_tenant_id, tax_id, name, brand_color`, gymID, color).
-		Scan(&gym.ID, &gym.AuthTenantID, &gym.RUC, &gym.Name, &gym.BrandColor)
+	if groupID != nil {
+		var one int
+		if err := r.pool.QueryRow(ctx, `SELECT 1 FROM groups WHERE id = $1`, *groupID).Scan(&one); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return app.AdminGym{}, domain.ErrForeignScope
+			}
+			return app.AdminGym{}, err
+		}
+	}
+	err := r.pool.QueryRow(ctx, `UPDATE gyms SET brand_color = COALESCE($2, brand_color), group_id = COALESCE($3, group_id), updated_at = now() WHERE id = $1
+		RETURNING id, group_id, auth_tenant_id, auth_client_id, tax_id, name, brand_color`, gymID, color, groupID).
+		Scan(&gym.ID, &gym.GroupID, &gym.AuthTenantID, &gym.AuthClientID, &gym.RUC, &gym.Name, &gym.BrandColor)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.AdminGym{}, domain.ErrResourceNotFound
 	}
@@ -103,8 +161,8 @@ func (r *Repository) SetGymColor(ctx context.Context, gymID uuid.UUID, color str
 // AddBranch creates a branch in a gym.
 func (r *Repository) AddBranch(ctx context.Context, gymID uuid.UUID, name string, address *string) (app.AdminBranch, error) {
 	branch := app.AdminBranch{ID: ids.New()}
-	err := r.pool.QueryRow(ctx, `INSERT INTO branches (id, gym_id, organization_id, name, address)
-		SELECT $1, g.id, g.organization_id, $3, $4 FROM gyms g WHERE g.id = $2
+	err := r.pool.QueryRow(ctx, `INSERT INTO branches (id, gym_id, name, address)
+		SELECT $1, g.id, $3, $4 FROM gyms g WHERE g.id = $2
 		RETURNING name, address`, branch.ID, gymID, name, address).Scan(&branch.Name, &branch.Address)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.AdminBranch{}, domain.ErrResourceNotFound

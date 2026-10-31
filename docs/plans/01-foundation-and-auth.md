@@ -1,5 +1,7 @@
 # Plan 01: foundation and auth
 
+> **Superseded by [plan 07](07-groups-and-gym-scoped-members.md):** "organization", "owner", "client" and "network" scope in this plan are replaced by group (internal label), no owner, and gym-scoped members; the tenant key is now `gym_id`.
+
 **State: done, waiting for the owner's review.**
 
 ## Scope

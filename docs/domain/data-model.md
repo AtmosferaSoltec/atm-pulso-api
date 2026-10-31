@@ -4,33 +4,50 @@ What exists today and what each plan adds. PostgreSQL, schema `pulso`, role `pul
 English `snake_case`, plural tables, `TIMESTAMPTZ` in UTC, UUID v7 ids, `NULL` instead of empty
 strings, money `NUMERIC(14,2)`.
 
-**Production already has migrations `00001` to `00011` applied. Never edit them.** All changes are new
+**Production already has migrations `00001` to `00012` applied. Never edit them.** All changes are new
 files `000NN_<module>_<what>.sql` with `Up` and `Down`.
 
 ## Tenant safety, by design
 
-Every business table carries `organization_id`. To let the **database itself** refuse cross-tenant
-links, parent tables expose `UNIQUE (id, organization_id)` and children use a **composite foreign key**
-`(parent_id, organization_id) REFERENCES parent (id, organization_id)`. The existing example is
-`users (gym_id, organization_id) -> gyms (id, organization_id)`. Follow it for every new link. Tests must
-prove that inserting a cross-tenant link fails (see `TestDatabaseEnforcesTenancyAndRoleRules`).
+Every business table carries `gym_id` (the **tenant**: a gym is a brand, see business rules §1). To let the
+**database itself** refuse cross-tenant links, parent tables expose `UNIQUE (id, gym_id)` and children use a
+**composite foreign key** `(parent_id, gym_id) REFERENCES parent (id, gym_id)`. Follow it for every new link.
+Tests must prove that inserting a cross-gym link fails (see `TestDatabaseEnforcesTenancyAndRoleRules`).
+The **group** is not a tenant key: no business table references it, only `gyms.group_id` does.
 
-## Existing (after migration 00012, central auth)
+> Replaced by migration 00013: until 00012 the tenant key was `organization_id` (the whole customer) and the
+> member directory was shared by all gyms of an organization. Organizations are now **groups** (an internal
+> label of the superadmin) and the tenant key is the gym. The text of "API-02 adds" and "API-03 adds"
+> below describes the history with the old names; read `organization_id` as `gym_id` there, and every
+> `organizations` mention as `groups`.
+
+## Existing (after migration 00013, groups and gym-scoped members)
 
 ```
-organizations (id, name, auth_client_id UNIQUE, created_at, updated_at)       -- an auth Client (the customer)
-gyms          (id, organization_id -> organizations, name, display_name, tax_id, brand_color, day_pass_price,
-               branch_sharing, membership_prices, auth_tenant_id UNIQUE, created_at, updated_at,
-               UNIQUE (id, organization_id))                                  -- an auth Company with Pulso enabled
-branches      (id, gym_id, organization_id, name, address, created_at, updated_at)   -- created by the superadmin
-users         (id, organization_id, gym_id, auth_user_id, document_number, full_name, phone, role,
-               is_active, created_at, updated_at, UNIQUE (gym_id, auth_user_id), UNIQUE (gym_id, document_number),
-               role IN ('admin','receptionist'), composite FK (gym_id, organization_id) -> gyms)
-                                                                -- one row per person per gym; no password anywhere
-user_branches (user_id, branch_id, organization_id)             -- a receptionist's branches
+groups        (id, name, created_at, updated_at)                           -- internal label chosen by the superadmin; not a user, no owner
+gyms          (id, group_id -> groups ON DELETE RESTRICT, name, display_name, tax_id, brand_color, day_pass_price,
+               branch_sharing, membership_prices, auth_tenant_id UNIQUE, auth_client_id, created_at, updated_at)
+                                                                -- an auth Company with Pulso enabled; auth_client_id is its auth Client
+branches      (id, gym_id -> gyms, name, address, created_at, updated_at, UNIQUE (id, gym_id))
+users         (id, gym_id -> gyms, auth_user_id, document_number, full_name, phone, role, is_active, created_at, updated_at,
+               UNIQUE (gym_id, auth_user_id), UNIQUE (gym_id, document_number), UNIQUE (id, gym_id), role IN ('admin','receptionist'))
+user_branches (user_id, branch_id, gym_id)                      -- a receptionist's branches, composite FKs on gym_id
+members       (id, gym_id, home_branch_id, document_type, document_number, full_name, phone, auth_user_id NULL, ...,
+               UNIQUE (gym_id, document_number), UNIQUE (gym_id, auth_user_id) WHERE auth_user_id IS NOT NULL)
+memberships   (..., gym_id, access_scope IN ('branch','gym'))   -- 'network' removed
+receipt_counters (gym_id, kind, last_number)  receipts (gym_id, kind, number, UNIQUE (gym_id, kind, number))   -- series per gym
+payments, day_passes, access_entries, membership_branches, payment_vouchers: `gym_id` instead of `organization_id`
 ```
 
-`gyms.tax_id` is the RUC; it is NULL when the company has none, and may repeat between gyms. `gyms.day_pass_price` NULL means "default 15.00".
+`gyms.tax_id` is the RUC; it is NULL when the company has none, and may repeat between gyms.
+`gyms.day_pass_price` NULL means "default 15.00". `members.auth_user_id` is reserved for the future `member`
+role (a person of atm-auth-api who sees their own data); nothing reads or writes it yet.
+
+### Superseded: existing shape until migration 00012
+
+```
+organizations (id, name, auth_client_id UNIQUE, ...) gyms (id, organization_id, ...) branches/users/user_branches with organization_id
+```
 
 ## API-02 adds
 
@@ -43,7 +60,7 @@ user_branches (user_id, branch_id, organization_id)             -- a receptionis
 - **`user_branches.organization_id`** with composite FKs to `users` and `branches`, so a receptionist can never
   be linked to a branch of another client.
 - ~~`plan_agreements`~~: dropped by migration 00009 (the product has no plans or limits).
-- ~~`gyms.logo_key`~~: dropped by migration 00012; the logo will come from the company profile in atm-auth-api.
+- ~~`gyms.logo_key`~~: dropped by migration 00012; the logo comes from the company profile in atm-auth-api (`logo_file_id`) and atm-storage-api, resolved at request time, never stored here.
 
 ## API-03 adds
 
@@ -54,7 +71,7 @@ members          (id, organization_id, home_branch_id, document_type 'dni'|'ce',
 memberships      (id, organization_id, member_id, months 1..24, starts_on, ends_on, amount, access_scope
                   'branch'|'gym'|'network', created_at, FK (member_id, organization_id) -> members)
 membership_branches (membership_id, branch_id, organization_id)   -- branches this period opens; includes the home branch
-receipt_counters (organization_id, kind 'membership'|'day_pass', last_number, PRIMARY KEY (organization_id, kind))
+receipt_counters (organization_id, kind 'membership'|'day_pass', last_number, PRIMARY KEY (organization_id, kind))   -- now gym_id
 receipts         (id, organization_id, kind, number int, branch_id, issued_on date, created_at,
                   UNIQUE (organization_id, kind, number), UNIQUE (id, organization_id))
 payments         (id, organization_id, receipt_id UNIQUE, branch_id, kind 'membership'|'day_pass',

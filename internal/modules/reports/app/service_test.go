@@ -37,13 +37,13 @@ func (f fakeRepo) Dashboard(context.Context, uuid.UUID, []uuid.UUID, time.Time, 
 }
 
 func newService(rows int) (*Service, auth.Principal, auth.Principal) {
-	org, gym, branch := uuid.New(), uuid.New(), uuid.New()
+	gym, branch := uuid.New(), uuid.New()
 	s := &Service{
 		Repo:      fakeRepo{rows: rows},
 		Directory: fakeDirectory{branches: []branchdir.Info{{ID: branch, GymID: gym}}},
 		Clock:     clock.Fixed{At: time.Date(2026, 10, 27, 15, 0, 0, 0, time.UTC)},
 	}
-	return s, auth.Principal{OrganizationID: org, GymID: gym, Role: auth.RoleAdmin}, auth.Principal{OrganizationID: org, Role: auth.RoleReceptionist, BranchIDs: []uuid.UUID{branch}}
+	return s, auth.Principal{GymID: gym, Role: auth.RoleAdmin}, auth.Principal{GymID: gym, Role: auth.RoleReceptionist, BranchIDs: []uuid.UUID{branch}}
 }
 
 func TestExportRefusesMoreThanTheLimitAndReception(t *testing.T) {

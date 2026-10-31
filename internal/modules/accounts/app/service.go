@@ -21,7 +21,9 @@ type Deps struct {
 	Catalogs  CatalogRepository
 	Admin     AdminRepository
 	Directory Directory
-	Clock     clock.Clock
+	// Logos may be nil (development without storage): every logo is then null.
+	Logos LogoResolver
+	Clock clock.Clock
 }
 
 // Service is the accounts use cases: know who asks, see and edit your own profile, manage
@@ -35,10 +37,20 @@ func NewService(deps Deps) *Service { return &Service{Deps: deps} }
 type Profile struct {
 	User  domain.User
 	Scope Scope
+	// LogoURL is the temporary address of the gym's logo; nil when it has none.
+	LogoURL *string
+}
+
+// logoOf resolves the logo of the principal's own gym; never fails.
+func (s *Service) logoOf(ctx context.Context, p auth.Principal) *string {
+	if s.Logos == nil {
+		return nil
+	}
+	return s.Logos.LogoURL(ctx, p.TenantID)
 }
 
 // Resolve turns the verified claims of atm-auth-api into who asks. Nothing is stored per
-// session: the organization, gym and person are found (or created on first sight) from the
+// session: the group, gym and person are found (or created on first sight) from the
 // token, so removing access or changing the role in the console shows at the next token.
 func (s *Service) Resolve(ctx context.Context, claims auth.Claims) (auth.Principal, error) {
 	authUser, errUser := uuid.Parse(claims.Subject)
@@ -58,7 +70,7 @@ func (s *Service) Resolve(ctx context.Context, claims auth.Claims) (auth.Princip
 	}
 
 	user, err := s.Users.EnsureUser(ctx, UserInput{
-		OrganizationID: tenancy.OrganizationID, GymID: tenancy.GymID, AuthUserID: authUser,
+		GymID: tenancy.GymID, AuthUserID: authUser,
 		DocumentNumber: claims.DNI, FullName: claims.Name, Role: role,
 	})
 	if err != nil {
@@ -69,7 +81,7 @@ func (s *Service) Resolve(ctx context.Context, claims auth.Claims) (auth.Princip
 	}
 
 	principal := auth.Principal{
-		UserID: user.ID, OrganizationID: tenancy.OrganizationID, GymID: tenancy.GymID, TenantID: tenantID,
+		UserID: user.ID, GroupID: tenancy.GroupID, GymID: tenancy.GymID, TenantID: tenantID,
 		Role: auth.Role(role),
 	}
 	if role == domain.RoleReceptionist {
@@ -121,7 +133,7 @@ func (s *Service) profileOf(ctx context.Context, p auth.Principal, user domain.U
 	if err != nil {
 		return Profile{}, fmt.Errorf("load scope: %w", err)
 	}
-	return Profile{User: user, Scope: scope}, nil
+	return Profile{User: user, Scope: scope, LogoURL: s.logoOf(ctx, p)}, nil
 }
 
 // UpdateProfile changes what the user may edit about themselves: name and phone. The DNI and

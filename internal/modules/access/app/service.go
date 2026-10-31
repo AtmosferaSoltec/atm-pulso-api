@@ -16,10 +16,10 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/receipts"
 )
 
-// Directory reads the branches of the organization (platform/branchdir implements it).
+// Directory reads the branches of the gym (platform/branchdir implements it).
 type Directory interface {
-	Branch(ctx context.Context, organizationID, branchID uuid.UUID) (branchdir.Info, error)
-	Branches(ctx context.Context, organizationID uuid.UUID) ([]branchdir.Info, error)
+	Branch(ctx context.Context, gymID, branchID uuid.UUID) (branchdir.Info, error)
+	Branches(ctx context.Context, gymID uuid.UUID) ([]branchdir.Info, error)
 }
 
 // MemberAccess is a member with what the decision needs.
@@ -35,7 +35,7 @@ type MemberAccess struct {
 // Entry is one logged access attempt.
 type Entry struct {
 	ID             uuid.UUID
-	OrganizationID uuid.UUID
+	GymID          uuid.UUID
 	BranchID       uuid.UUID
 	MemberID       *uuid.UUID
 	DisplayName    string
@@ -76,14 +76,14 @@ type Visitor struct {
 
 // DayPassSale is a day pass about to be stored with its receipt, payment and entry.
 type DayPassSale struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	ActorID        uuid.UUID
-	BranchID       uuid.UUID
-	Amount         string
-	Method         string
-	Visitor        Visitor
-	Today          time.Time
+	ID       uuid.UUID
+	GymID    uuid.UUID
+	ActorID  uuid.UUID
+	BranchID uuid.UUID
+	Amount   string
+	Method   string
+	Visitor  Visitor
+	Today    time.Time
 }
 
 // DayPassFilter narrows the day pass list.
@@ -97,14 +97,14 @@ type DayPassFilter struct {
 // Repository is the persistence port.
 type Repository interface {
 	// Member finds by id or by document; domain.ErrMemberNotFound when there is none.
-	Member(ctx context.Context, organizationID uuid.UUID, id *uuid.UUID, document string) (MemberAccess, error)
-	Entry(ctx context.Context, organizationID, id uuid.UUID) (Entry, error)
+	Member(ctx context.Context, gymID uuid.UUID, id *uuid.UUID, document string) (MemberAccess, error)
+	Entry(ctx context.Context, gymID, id uuid.UUID) (Entry, error)
 	InsertEntry(ctx context.Context, e Entry) error
-	Events(ctx context.Context, organizationID uuid.UUID, f EventFilter) ([]EventView, int, error)
-	Summary(ctx context.Context, organizationID uuid.UUID, branchIDs []uuid.UUID, from, to time.Time) (Summary, error)
+	Events(ctx context.Context, gymID uuid.UUID, f EventFilter) ([]EventView, int, error)
+	Summary(ctx context.Context, gymID uuid.UUID, branchIDs []uuid.UUID, from, to time.Time) (Summary, error)
 	SellDayPass(ctx context.Context, sale DayPassSale) (existed bool, err error)
-	DayPass(ctx context.Context, organizationID, id uuid.UUID) (DayPassView, error)
-	DayPasses(ctx context.Context, organizationID uuid.UUID, f DayPassFilter) ([]DayPassView, int, error)
+	DayPass(ctx context.Context, gymID, id uuid.UUID) (DayPassView, error)
+	DayPasses(ctx context.Context, gymID uuid.UUID, f DayPassFilter) ([]DayPassView, int, error)
 }
 
 // Service implements the use cases.
@@ -117,7 +117,7 @@ type Service struct {
 func (s *Service) today() time.Time { return clock.LimaDate(s.Clock.Now()) }
 
 func (s *Service) branchFor(ctx context.Context, p auth.Principal, id uuid.UUID) (branchdir.Info, error) {
-	branch, err := s.Directory.Branch(ctx, p.OrganizationID, id)
+	branch, err := s.Directory.Branch(ctx, p.GymID, id)
 	if err != nil {
 		return branchdir.Info{}, err
 	}
@@ -136,7 +136,7 @@ func (s *Service) reach(ctx context.Context, p auth.Principal, branchID *uuid.UU
 		}
 		return []uuid.UUID{branch.ID}, nil
 	}
-	all, err := s.Directory.Branches(ctx, p.OrganizationID)
+	all, err := s.Directory.Branches(ctx, p.GymID)
 	if err != nil {
 		return nil, err
 	}
@@ -205,15 +205,15 @@ func (s *Service) Check(ctx context.Context, p auth.Principal, in CheckInput) (C
 		return CheckResult{}, &domain.ValidationError{Issues: []domain.Issue{{Field: "document_number", Code: "DOCUMENT_NUMBER_INVALID"}}}
 	}
 	if in.ID != uuid.Nil {
-		if existing, err := s.Repo.Entry(ctx, p.OrganizationID, in.ID); err == nil {
+		if existing, err := s.Repo.Entry(ctx, p.GymID, in.ID); err == nil {
 			return resultOf(existing), nil
 		}
 	}
-	entry := Entry{ID: in.ID, OrganizationID: p.OrganizationID, BranchID: branch.ID, Kind: "check", CheckedBy: p.UserID}
+	entry := Entry{ID: in.ID, GymID: p.GymID, BranchID: branch.ID, Kind: "check", CheckedBy: p.UserID}
 	if entry.ID == uuid.Nil {
 		entry.ID = ids.New()
 	}
-	member, err := s.Repo.Member(ctx, p.OrganizationID, in.MemberID, in.DocumentNumber)
+	member, err := s.Repo.Member(ctx, p.GymID, in.MemberID, in.DocumentNumber)
 	switch {
 	case err == domain.ErrMemberNotFound && in.MemberID != nil:
 		return CheckResult{}, err
@@ -232,7 +232,7 @@ func (s *Service) Check(ctx context.Context, p auth.Principal, in CheckInput) (C
 		return CheckResult{}, err
 	}
 	// The stored time is assigned by the database; read it back so the answer carries it.
-	stored, err := s.Repo.Entry(ctx, p.OrganizationID, entry.ID)
+	stored, err := s.Repo.Entry(ctx, p.GymID, entry.ID)
 	if err != nil {
 		return CheckResult{}, err
 	}
@@ -274,7 +274,7 @@ func (s *Service) Events(ctx context.Context, p auth.Principal, q EventsQuery) (
 	if err != nil {
 		return nil, 0, err
 	}
-	return s.Repo.Events(ctx, p.OrganizationID, EventFilter{BranchIDs: branches, Result: q.Result, From: q.From, To: q.To, Query: q.Query, Page: q.Page, PageSize: q.PageSize})
+	return s.Repo.Events(ctx, p.GymID, EventFilter{BranchIDs: branches, Result: q.Result, From: q.From, To: q.To, Query: q.Query, Page: q.Page, PageSize: q.PageSize})
 }
 
 // SummaryOf counts a Lima day (today when date is nil).
@@ -287,7 +287,7 @@ func (s *Service) SummaryOf(ctx context.Context, p auth.Principal, branchID *uui
 	if date != nil {
 		day = *date
 	}
-	return s.Repo.Summary(ctx, p.OrganizationID, branches, day, day)
+	return s.Repo.Summary(ctx, p.GymID, branches, day, day)
 }
 
 // DayPassView is a sold day pass.
@@ -343,18 +343,18 @@ func (s *Service) SellDayPass(ctx context.Context, p auth.Principal, in DayPassI
 	if id == uuid.Nil {
 		id = ids.New()
 	}
-	existed, err := s.Repo.SellDayPass(ctx, DayPassSale{ID: id, OrganizationID: p.OrganizationID, ActorID: p.UserID, BranchID: branch.ID,
+	existed, err := s.Repo.SellDayPass(ctx, DayPassSale{ID: id, GymID: p.GymID, ActorID: p.UserID, BranchID: branch.ID,
 		Amount: branch.DayPassPrice, Method: in.Method, Visitor: visitor, Today: s.today()})
 	if err != nil {
 		return DayPassView{}, false, err
 	}
-	view, err := s.Repo.DayPass(ctx, p.OrganizationID, id)
+	view, err := s.Repo.DayPass(ctx, p.GymID, id)
 	return view, existed, err
 }
 
 // DayPass returns one sold day pass.
 func (s *Service) DayPass(ctx context.Context, p auth.Principal, id uuid.UUID) (DayPassView, error) {
-	return s.Repo.DayPass(ctx, p.OrganizationID, id)
+	return s.Repo.DayPass(ctx, p.GymID, id)
 }
 
 // DayPassQuery is the parsed query of GET /day-passes.
@@ -371,5 +371,5 @@ func (s *Service) DayPasses(ctx context.Context, p auth.Principal, q DayPassQuer
 	if err != nil {
 		return nil, 0, err
 	}
-	return s.Repo.DayPasses(ctx, p.OrganizationID, DayPassFilter{BranchIDs: branches, From: q.From, To: q.To, Page: q.Page, PageSize: q.PageSize})
+	return s.Repo.DayPasses(ctx, p.GymID, DayPassFilter{BranchIDs: branches, From: q.From, To: q.To, Page: q.Page, PageSize: q.PageSize})
 }

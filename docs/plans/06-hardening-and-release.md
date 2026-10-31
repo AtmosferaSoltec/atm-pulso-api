@@ -1,5 +1,7 @@
 # API-06: hardening and release candidate
 
+> **Superseded by [plan 07](07-groups-and-gym-scoped-members.md):** "organization", "owner", "client" and "network" scope in this plan are replaced by group (internal label), no owner, and gym-scoped members; the tenant key is now `gym_id`.
+
 **Depends on:** API-02 to API-05. **Unlocks:** deploy (done by the assistant, not by you).
 
 ## Goal

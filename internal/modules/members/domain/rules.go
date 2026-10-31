@@ -35,13 +35,13 @@ type Period struct {
 type Scope string
 
 const (
-	ScopeBranch  Scope = "branch"
-	ScopeGym     Scope = "gym"
-	ScopeNetwork Scope = "network"
+	ScopeBranch Scope = "branch"
+	ScopeGym    Scope = "gym"
 )
 
-// Valid reports whether the scope is one of the three known values.
-func (s Scope) Valid() bool { return s == ScopeBranch || s == ScopeGym || s == ScopeNetwork }
+// Valid reports whether the scope is one of the two known values. There is no wider scope:
+// nothing is shared between gyms (plan 07).
+func (s Scope) Valid() bool { return s == ScopeBranch || s == ScopeGym }
 
 // Branch is a branch and its gym.
 type Branch struct {
@@ -144,7 +144,7 @@ var ErrAccessBranches = errors.New("access branches invalid")
 
 // AccessBranches returns the branches a membership opens. Without a request it is every
 // branch of the scope; with one, the request must be a subset of the scope and contain
-// the home branch. all lists every branch of the organization.
+// the home branch. all lists every branch of the gym.
 func AccessBranches(scope Scope, home Branch, all []Branch, requested []uuid.UUID) ([]uuid.UUID, error) {
 	inScope := make([]uuid.UUID, 0, len(all))
 	for _, b := range all {
@@ -157,8 +157,6 @@ func AccessBranches(scope Scope, home Branch, all []Branch, requested []uuid.UUI
 			if b.GymID == home.GymID {
 				inScope = append(inScope, b.ID)
 			}
-		case ScopeNetwork:
-			inScope = append(inScope, b.ID)
 		}
 	}
 	if len(requested) == 0 {

@@ -1,5 +1,7 @@
 # API-03: members, enrollment, receipts and payments
 
+> **Superseded by [plan 07](07-groups-and-gym-scoped-members.md):** "organization", "owner", "client" and "network" scope in this plan are replaced by group (internal label), no owner, and gym-scoped members; the tenant key is now `gym_id`.
+
 **Depends on:** API-02. **Unlocks:** WEB-03, API-04. **Rules:** business-rules §6, §7, §8, §9, §10, §18.
 
 ## Goal

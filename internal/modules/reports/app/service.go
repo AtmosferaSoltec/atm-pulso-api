@@ -32,10 +32,10 @@ var (
 	ErrRange = errors.New("invalid range")
 )
 
-// Directory reads the branches of the organization (platform/branchdir implements it).
+// Directory reads the branches of the gym (platform/branchdir implements it).
 type Directory interface {
-	Branch(ctx context.Context, organizationID, branchID uuid.UUID) (branchdir.Info, error)
-	Branches(ctx context.Context, organizationID uuid.UUID) ([]branchdir.Info, error)
+	Branch(ctx context.Context, gymID, branchID uuid.UUID) (branchdir.Info, error)
+	Branches(ctx context.Context, gymID uuid.UUID) ([]branchdir.Info, error)
 }
 
 // Service implements the use cases.
@@ -142,9 +142,9 @@ type ExpiringItem struct {
 
 // Repository is the read port.
 type Repository interface {
-	Payments(ctx context.Context, organizationID uuid.UUID, f PaymentFilter) ([]PaymentRow, int, error)
-	Totals(ctx context.Context, organizationID uuid.UUID, f PaymentFilter) (Totals, error)
-	Dashboard(ctx context.Context, organizationID uuid.UUID, branchIDs []uuid.UUID, today, monthStart time.Time) (DashboardView, error)
+	Payments(ctx context.Context, gymID uuid.UUID, f PaymentFilter) ([]PaymentRow, int, error)
+	Totals(ctx context.Context, gymID uuid.UUID, f PaymentFilter) (Totals, error)
+	Dashboard(ctx context.Context, gymID uuid.UUID, branchIDs []uuid.UUID, today, monthStart time.Time) (DashboardView, error)
 }
 
 // PaymentQuery is the parsed query of GET /payments.
@@ -160,7 +160,7 @@ func (s *Service) today() time.Time { return clock.LimaDate(s.Clock.Now()) }
 
 // reach returns the branches the caller may read, narrowed by branch or gym.
 func (s *Service) reach(ctx context.Context, p auth.Principal, branchID, gymID *uuid.UUID) ([]uuid.UUID, error) {
-	all, err := s.Directory.Branches(ctx, p.OrganizationID)
+	all, err := s.Directory.Branches(ctx, p.GymID)
 	if err != nil {
 		return nil, err
 	}
@@ -223,14 +223,14 @@ func (s *Service) Payments(ctx context.Context, p auth.Principal, q PaymentQuery
 		return nil, 0, nil, err
 	}
 	f.Limit, f.Offset = q.PageSize, (q.Page-1)*q.PageSize
-	rows, total, err := s.Repo.Payments(ctx, p.OrganizationID, f)
+	rows, total, err := s.Repo.Payments(ctx, p.GymID, f)
 	if err != nil {
 		return nil, 0, nil, err
 	}
 	if p.Role == auth.RoleReceptionist {
 		return rows, total, nil, nil
 	}
-	totals, err := s.Repo.Totals(ctx, p.OrganizationID, f)
+	totals, err := s.Repo.Totals(ctx, p.GymID, f)
 	if err != nil {
 		return nil, 0, nil, err
 	}
@@ -247,7 +247,7 @@ func (s *Service) Export(ctx context.Context, p auth.Principal, q PaymentQuery) 
 		return nil, err
 	}
 	f.Limit = MaxExportRows + 1
-	rows, _, err := s.Repo.Payments(ctx, p.OrganizationID, f)
+	rows, _, err := s.Repo.Payments(ctx, p.GymID, f)
 	if err != nil {
 		return nil, err
 	}
@@ -267,5 +267,5 @@ func (s *Service) Dashboard(ctx context.Context, p auth.Principal, branchID, gym
 		return DashboardView{}, err
 	}
 	today := s.today()
-	return s.Repo.Dashboard(ctx, p.OrganizationID, branches, today, time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC))
+	return s.Repo.Dashboard(ctx, p.GymID, branches, today, time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC))
 }

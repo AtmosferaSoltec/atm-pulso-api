@@ -39,7 +39,8 @@ func TestMeForEveryRole(t *testing.T) {
 			assert.Equal(t, tc.document, user["document_number"])
 			assert.Equal(t, tc.role, user["role"])
 			assert.NotContains(t, user, "must_change_password")
-			assert.Equal(t, tn.OrganizationName, user["organization"].(map[string]any)["name"])
+			assert.NotContains(t, user, "organization", "the group is internal and never shown")
+			assert.NotContains(t, user, "group")
 			gym := user["gym"].(map[string]any)
 			assert.Equal(t, tc.gym, gym["name"])
 			assert.Contains(t, gym, "brand_color")
@@ -81,19 +82,20 @@ func TestPrivateRoutesNeedAValidUserToken(t *testing.T) {
 		token string
 		want  expectation
 	}{
-		"no token":            {"", unauthorized},
-		"garbage":             {"not-a-token", unauthorized},
-		"another key":         {h.tokens.MintWith(t, otherKey, "test-key", claims), unauthorized},
-		"unknown key id":      {h.tokens.MintWith(t, otherKey, "rotated", claims), unauthorized},
-		"expired":             {with(map[string]any{"exp": time.Now().Add(-time.Minute).Unix()}), unauthorized},
-		"another issuer":      {with(map[string]any{"iss": "https://evil.test"}), unauthorized},
-		"another system":      {with(map[string]any{"system": "olympus"}), noAccess},
-		"no company":          {with(map[string]any{"tenant": ""}), noAccess},
-		"no client":           {with(map[string]any{"client": ""}), noAccess},
-		"unknown role":        {with(map[string]any{"app_role": "cashier"}), noAccess},
-		"owner is gone":       {with(map[string]any{"app_role": "owner"}), noAccess},
-		"a service token":     {with(map[string]any{"role": "service", "sub": "system:pulso"}), noAccess},
-		"superadmin on users": {h.superToken(t), expectation{http.StatusForbidden, "FORBIDDEN"}},
+		"no token":             {"", unauthorized},
+		"garbage":              {"not-a-token", unauthorized},
+		"another key":          {h.tokens.MintWith(t, otherKey, "test-key", claims), unauthorized},
+		"unknown key id":       {h.tokens.MintWith(t, otherKey, "rotated", claims), unauthorized},
+		"expired":              {with(map[string]any{"exp": time.Now().Add(-time.Minute).Unix()}), unauthorized},
+		"another issuer":       {with(map[string]any{"iss": "https://evil.test"}), unauthorized},
+		"another system":       {with(map[string]any{"system": "olympus"}), noAccess},
+		"no company":           {with(map[string]any{"tenant": ""}), noAccess},
+		"no client":            {with(map[string]any{"client": ""}), noAccess},
+		"unknown role":         {with(map[string]any{"app_role": "cashier"}), noAccess},
+		"owner is gone":        {with(map[string]any{"app_role": "owner"}), noAccess},
+		"member is not active": {with(map[string]any{"app_role": "member"}), noAccess},
+		"a service token":      {with(map[string]any{"role": "service", "sub": "system:pulso"}), noAccess},
+		"superadmin on users":  {h.superToken(t), expectation{http.StatusForbidden, "FORBIDDEN"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, path := range []string{"/me", "/documents/persons/45678912"} {
@@ -115,9 +117,7 @@ func TestFirstSightRecordsClientCompanyBranchAndPerson(t *testing.T) {
 	h := newHarness(t)
 	client, tenantID, authUser := uuid.New(), uuid.New(), uuid.New()
 	document := uniqueDocument()
-	t.Cleanup(func() {
-		_, _ = h.pool.Exec(context.Background(), `DELETE FROM organizations WHERE auth_client_id = $1`, client)
-	})
+	h.cleanupClient(t, client)
 	h.auth.SetTenant(authapi.Tenant{ID: tenantID.String(), RUC: "20555555555", DisplayName: "Titanes Gym", ClientID: client.String(), ClientName: "Familia Titanes"})
 	token := h.tokens.Mint(t, map[string]any{
 		"sub": authUser.String(), "role": "user", "system": systemCode, "tenant": tenantID.String(),
@@ -127,7 +127,7 @@ func TestFirstSightRecordsClientCompanyBranchAndPerson(t *testing.T) {
 
 	me := h.call(t, http.MethodGet, "/me", token, nil)
 	require.Equal(t, http.StatusOK, me.status, "%v", me.body)
-	assert.Equal(t, "Familia Titanes", me.data()["organization"].(map[string]any)["name"])
+	assert.NotContains(t, me.data(), "organization")
 	assert.Equal(t, "Titanes Gym", me.data()["gym"].(map[string]any)["name"], "the name of the company comes from atm-auth-api")
 	branches := me.data()["branches"].([]any)
 	require.Len(t, branches, 1)
@@ -136,15 +136,15 @@ func TestFirstSightRecordsClientCompanyBranchAndPerson(t *testing.T) {
 
 	again := h.call(t, http.MethodGet, "/me", token, nil)
 	assert.Equal(t, me.data()["id"], again.data()["id"], "the same person, not a new record")
-	var organizations, gyms, branchRows, users int
+	var groups, gyms, branchRows, users int
 	require.NoError(t, h.pool.QueryRow(context.Background(), `SELECT
-		(SELECT count(*) FROM organizations WHERE auth_client_id = $1),
+		(SELECT count(DISTINCT group_id) FROM gyms WHERE auth_client_id = $1),
 		(SELECT count(*) FROM gyms WHERE auth_tenant_id = $2),
 		(SELECT count(*) FROM branches b JOIN gyms g ON g.id = b.gym_id WHERE g.auth_tenant_id = $2),
-		(SELECT count(*) FROM users WHERE auth_user_id = $3)`, client, tenantID, authUser).Scan(&organizations, &gyms, &branchRows, &users))
-	assert.Equal(t, []int{1, 1, 1, 1}, []int{organizations, gyms, branchRows, users})
+		(SELECT count(*) FROM users WHERE auth_user_id = $3)`, client, tenantID, authUser).Scan(&groups, &gyms, &branchRows, &users))
+	assert.Equal(t, []int{1, 1, 1, 1}, []int{groups, gyms, branchRows, users})
 
-	t.Run("a second company of the same client shares the organization", func(t *testing.T) {
+	t.Run("a second company of the same client joins the same group", func(t *testing.T) {
 		second := uuid.New()
 		other := h.tokens.Mint(t, map[string]any{
 			"sub": authUser.String(), "role": "user", "system": systemCode, "tenant": second.String(),
@@ -153,7 +153,9 @@ func TestFirstSightRecordsClientCompanyBranchAndPerson(t *testing.T) {
 		})
 		res := h.call(t, http.MethodGet, "/me", other, nil)
 		require.Equal(t, http.StatusOK, res.status, "%v", res.body)
-		assert.Equal(t, me.data()["organization"], res.data()["organization"])
+		var groupsOfClient int
+		require.NoError(t, h.pool.QueryRow(context.Background(), `SELECT count(DISTINCT group_id) FROM gyms WHERE auth_client_id = $1`, client).Scan(&groupsOfClient))
+		assert.Equal(t, 1, groupsOfClient, "both companies are in one group")
 		assert.NotEqual(t, me.data()["gym"], res.data()["gym"])
 		assert.Equal(t, "20666666666", res.data()["gym"].(map[string]any)["name"], "without the company list the RUC names the gym")
 	})
@@ -164,7 +166,7 @@ func TestFirstSightRecordsClientCompanyBranchAndPerson(t *testing.T) {
 			"client": uuid.NewString(), "client_name": "Intruso", "app_role": "admin", "name": "Rosa Titán", "dni": document,
 		})
 		defer func() {
-			_, _ = h.pool.Exec(context.Background(), `DELETE FROM organizations WHERE name = 'Intruso'`)
+			_, _ = h.pool.Exec(context.Background(), `DELETE FROM groups WHERE name = 'Intruso'`)
 		}()
 		res := h.call(t, http.MethodGet, "/me", stolen, nil)
 		assert.Equal(t, http.StatusForbidden, res.status)
@@ -240,25 +242,27 @@ func TestDatabaseEnforcesTenancyAndRoleRules(t *testing.T) {
 	tn := h.newTenant(t)
 	other := h.newTenant(t)
 
-	insert := func(document, role string, organization, gym any) error {
-		_, err := h.pool.Exec(ctx, `INSERT INTO users (id, organization_id, gym_id, auth_user_id, document_number, full_name, role)
-			VALUES ($1, $2, $3, $4, $5, 'Persona', $6)`, ids.New(), organization, gym, uuid.New(), document, role)
+	insert := func(document, role string, gym any) error {
+		_, err := h.pool.Exec(ctx, `INSERT INTO users (id, gym_id, auth_user_id, document_number, full_name, role)
+			VALUES ($1, $2, $3, $4, 'Persona', $5)`, ids.New(), gym, uuid.New(), document, role)
 		return err
 	}
 
-	assert.Error(t, insert(uniqueDocument(), "admin", nil, nil), "a person needs an organization and a gym")
-	assert.Error(t, insert(uniqueDocument(), "owner", tn.OrganizationID, tn.GymOne), "owner is not a role anymore")
-	assert.Error(t, insert(uniqueDocument(), "superadmin", tn.OrganizationID, tn.GymOne), "nor is superadmin")
-	assert.Error(t, insert("1000000", "admin", tn.OrganizationID, tn.GymOne), "a DNI has eight digits")
-	assert.Error(t, insert(tn.Admin, "admin", tn.OrganizationID, tn.GymOne), "the DNI is unique inside a gym")
-	assert.Error(t, insert(uniqueDocument(), "admin", tn.OrganizationID, other.GymOne), "a gym of another organization is refused")
-	assert.NoError(t, insert(tn.Admin, "admin", tn.OrganizationID, tn.GymTwo), "the same person can work for a second gym")
+	assert.Error(t, insert(uniqueDocument(), "admin", nil), "a person needs a gym")
+	assert.Error(t, insert(uniqueDocument(), "owner", tn.GymOne), "owner is not a role anymore")
+	assert.Error(t, insert(uniqueDocument(), "member", tn.GymOne), "the member role is not active yet")
+	assert.Error(t, insert(uniqueDocument(), "superadmin", tn.GymOne), "nor is superadmin")
+	assert.Error(t, insert("1000000", "admin", tn.GymOne), "a DNI has eight digits")
+	assert.Error(t, insert(tn.Admin, "admin", tn.GymOne), "the DNI is unique inside a gym")
+	assert.Error(t, insert(uniqueDocument(), "admin", uuid.New()), "an unknown gym is refused")
+	assert.NoError(t, insert(tn.Admin, "admin", tn.GymTwo), "the same person can work for a second gym")
 
-	link := func(userID, branchID, organization uuid.UUID) error {
-		_, err := h.pool.Exec(ctx, `INSERT INTO user_branches (user_id, branch_id, organization_id) VALUES ($1, $2, $3)`, userID, branchID, organization)
+	link := func(userID, branchID, gym uuid.UUID) error {
+		_, err := h.pool.Exec(ctx, `INSERT INTO user_branches (user_id, branch_id, gym_id) VALUES ($1, $2, $3)`, userID, branchID, gym)
 		return err
 	}
-	assert.Error(t, link(tn.ReceptionistID, other.BranchA, tn.OrganizationID), "reception cannot work a branch of another organization")
-	assert.Error(t, link(tn.ReceptionistID, other.BranchA, other.OrganizationID), "nor borrow another organization's id")
-	assert.Error(t, link(tn.ReceptionistID, tn.BranchA, tn.OrganizationID), "the same branch is not linked twice")
+	assert.Error(t, link(tn.ReceptionistID, other.BranchA, tn.GymOne), "reception cannot work a branch of another gym")
+	assert.Error(t, link(tn.ReceptionistID, tn.BranchC, tn.GymOne), "nor a branch of a sibling gym of the same group")
+	assert.Error(t, link(tn.ReceptionistID, other.BranchA, other.GymOne), "nor borrow another gym's id")
+	assert.Error(t, link(tn.ReceptionistID, tn.BranchA, tn.GymOne), "the same branch is not linked twice")
 }

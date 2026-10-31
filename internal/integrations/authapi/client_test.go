@@ -36,7 +36,7 @@ func TestHTTPClient(t *testing.T) {
 		}
 	}
 	mux.HandleFunc("GET /v1/service/tenants", guard(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": []Tenant{{ID: "t1", RUC: "20123456789", LegalName: "ATLAS SAC", DisplayName: "Atlas Gym"}}})
+		_, _ = w.Write([]byte(`{"items":[{"id":"t1","ruc":"20123456789","legal_name":"ATLAS SAC","display_name":"Atlas Gym","logo_file_id":"0b6e5b7e-0000-4000-8000-000000000001"},{"id":"t2","logo_file_id":null}]}`))
 	}))
 	mux.HandleFunc("POST /v1/service/members", guard(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "t1", r.URL.Query().Get("tenant_id"))
@@ -55,6 +55,11 @@ func TestHTTPClient(t *testing.T) {
 	tenant, err := client.Tenant(ctx, "t1")
 	require.NoError(t, err)
 	assert.Equal(t, "Atlas Gym", tenant.Name())
+	require.NotNil(t, tenant.LogoFileID)
+	assert.Equal(t, "0b6e5b7e-0000-4000-8000-000000000001", *tenant.LogoFileID)
+	noLogo, err := client.Tenant(ctx, "t2")
+	require.NoError(t, err)
+	assert.Nil(t, noLogo.LogoFileID)
 	_, err = client.Tenant(ctx, "other")
 	assert.ErrorIs(t, err, ErrNotFound)
 	assert.EqualValues(t, 1, tokenCalls.Load(), "the service token is cached")

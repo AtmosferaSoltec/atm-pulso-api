@@ -11,9 +11,9 @@ const MaxPerPayment = 5
 const MaxBytes = 10 << 20
 
 var (
-	// ErrReceiptNotFound: no payment for that receipt in the organization (or out of reach).
+	// ErrReceiptNotFound: no payment for that receipt in the gym (or out of reach).
 	ErrReceiptNotFound = errors.New("receipt not found")
-	// ErrVoucherNotFound: the voucher is not in the organization (or out of reach).
+	// ErrVoucherNotFound: the voucher is not in the gym (or out of reach).
 	ErrVoucherNotFound = errors.New("voucher not found")
 	// ErrForbidden: the role cannot do this.
 	ErrForbidden = errors.New("forbidden")

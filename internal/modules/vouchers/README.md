@@ -7,8 +7,8 @@ claims.
 
 ## Table (it owns it)
 `payment_vouchers` (key and metadata only; the files live in the private R2 bucket under
-`vouchers/<organization>/<payment>/<id>.<ext>`). It references `payments` with a composite foreign key,
-so a voucher can never belong to another organization's payment. The `payments` table itself belongs to
+`vouchers/<gym>/<payment>/<id>.<ext>`). It references `payments` with a composite foreign key,
+so a voucher can never belong to another gym's payment. The `payments` table itself belongs to
 the sales modules (written through `platform/receipts`); this module only reads it.
 
 ## Endpoints

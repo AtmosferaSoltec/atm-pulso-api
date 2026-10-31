@@ -1,5 +1,7 @@
 # API-05: payments report and dashboard
 
+> **Superseded by [plan 07](07-groups-and-gym-scoped-members.md):** "organization", "owner", "client" and "network" scope in this plan are replaced by group (internal label), no owner, and gym-scoped members; the tenant key is now `gym_id`.
+
 **Depends on:** API-03 and API-04. **Unlocks:** WEB-05. **Rules:** business-rules §9, §17.
 
 ## Goal

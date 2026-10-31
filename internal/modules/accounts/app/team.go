@@ -113,7 +113,7 @@ func (s *Service) ListUsers(ctx context.Context, p auth.Principal, page, size in
 		}
 		authActive[authUser] = member.Active
 		if _, err := s.Team.SaveTeamUser(ctx, TeamSave{UserInput: UserInput{
-			OrganizationID: p.OrganizationID, GymID: p.GymID, AuthUserID: authUser,
+			GymID: p.GymID, AuthUserID: authUser,
 			DocumentNumber: member.DocumentNumber, FullName: member.FullName, Role: role,
 		}, KeepProfile: true}); err != nil {
 			return nil, 0, err
@@ -192,7 +192,7 @@ func (s *Service) CreateUser(ctx context.Context, p auth.Principal, input NewUse
 		return TeamUser{}, domain.ErrAuthUnavailable
 	}
 	saved, err := s.Team.SaveTeamUser(ctx, TeamSave{
-		UserInput: UserInput{OrganizationID: p.OrganizationID, GymID: p.GymID, AuthUserID: authUser,
+		UserInput: UserInput{GymID: p.GymID, AuthUserID: authUser,
 			DocumentNumber: input.DocumentNumber, FullName: name, Role: input.Role},
 		Branches: branches, ReplaceBranches: true,
 	})
@@ -222,7 +222,7 @@ func (s *Service) UpdateUser(ctx context.Context, p auth.Principal, id uuid.UUID
 	if err != nil {
 		return TeamUser{}, err
 	}
-	save := TeamSave{UserInput: UserInput{OrganizationID: p.OrganizationID, GymID: p.GymID, AuthUserID: user.AuthUserID,
+	save := TeamSave{UserInput: UserInput{GymID: p.GymID, AuthUserID: user.AuthUserID,
 		DocumentNumber: user.DocumentNumber, FullName: user.FullName, Role: user.Role}}
 	if input.FullName != nil {
 		name, _, err := domain.ProfileChanges(*input.FullName, "")

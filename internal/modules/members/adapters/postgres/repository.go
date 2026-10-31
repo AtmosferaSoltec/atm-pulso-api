@@ -28,7 +28,7 @@ func formatDate(t time.Time) string { return t.Format("2006-01-02") }
 
 // statusBase computes only the status in SQL (a cheap aggregate per member), so filtering, counting
 // and paging happen before the heavier per-row details are looked up.
-// $1 organization, $2 today (Lima), $3 search text, $4 home branch (or NULL), $5 member id (or NULL).
+// $1 gym, $2 today (Lima), $3 search text, $4 home branch (or NULL), $5 member id (or NULL).
 const statusBase = `
 WITH base AS (
   SELECT m.id, m.document_type, m.document_number, m.full_name, m.phone, m.created_at, m.home_branch_id,
@@ -43,7 +43,7 @@ WITH base AS (
            bool_or(starts_on <= $2::date AND ends_on >= $2::date) AS active_now,
            bool_or(starts_on > $2::date) AS scheduled
     FROM memberships WHERE member_id = m.id) s ON true
-  WHERE m.organization_id = $1
+  WHERE m.gym_id = $1
     AND ($3::text = '' OR m.full_name ILIKE '%' || $3 || '%' OR m.document_number LIKE '%' || $3 || '%')
     AND ($4::uuid IS NULL OR m.home_branch_id = $4)
     AND ($5::uuid IS NULL OR m.id = $5)
@@ -58,8 +58,8 @@ SELECT pg.id, pg.document_type, pg.document_number, pg.full_name, pg.phone, pg.c
        b.id, b.name, COALESCE(g.display_name, g.name), pg.status, pg.days_remaining,
        COALESCE(cur.months, 0), cur.starts_on, cur.ends_on, lr.number
 FROM page pg
-JOIN branches b ON b.id = pg.home_branch_id AND b.organization_id = $1
-JOIN gyms g ON g.id = b.gym_id AND g.organization_id = b.organization_id
+JOIN branches b ON b.id = pg.home_branch_id AND b.gym_id = $1
+JOIN gyms g ON g.id = b.gym_id
 LEFT JOIN LATERAL (
   SELECT months, starts_on, ends_on FROM memberships WHERE member_id = pg.id
   ORDER BY (starts_on <= $2::date AND ends_on >= $2::date) DESC, ends_on DESC LIMIT 1) cur ON true
@@ -96,13 +96,13 @@ func scanMember(row pgx.Row) (app.MemberView, error) {
 }
 
 // List returns a page of the shared directory and the counts per status.
-func (r *Repository) List(ctx context.Context, organizationID uuid.UUID, f app.Filter, today time.Time) (app.ListResult, error) {
+func (r *Repository) List(ctx context.Context, gymID uuid.UUID, f app.Filter, today time.Time) (app.ListResult, error) {
 	query := likeEscaper.Replace(strings.TrimSpace(f.Query))
 	var out app.ListResult
 	err := r.pool.QueryRow(ctx, statusBase+`
 		SELECT count(*), count(*) FILTER (WHERE status='active'), count(*) FILTER (WHERE status='expiring'),
 		       count(*) FILTER (WHERE status='expired'), count(*) FILTER (WHERE status='scheduled') FROM base`,
-		organizationID, today, query, f.HomeBranchID, nil).
+		gymID, today, query, f.HomeBranchID, nil).
 		Scan(&out.Counts.All, &out.Counts.Active, &out.Counts.Expiring, &out.Counts.Expired, &out.Counts.Scheduled)
 	if err != nil {
 		return out, err
@@ -119,7 +119,7 @@ func (r *Repository) List(ctx context.Context, organizationID uuid.UUID, f app.F
 	case "scheduled":
 		out.Total = out.Counts.Scheduled
 	}
-	rows, err := r.pool.Query(ctx, pageQuery, organizationID, today, query, f.HomeBranchID, nil, f.Status, f.PageSize, (f.Page-1)*f.PageSize)
+	rows, err := r.pool.Query(ctx, pageQuery, gymID, today, query, f.HomeBranchID, nil, f.Status, f.PageSize, (f.Page-1)*f.PageSize)
 	if err != nil {
 		return out, err
 	}
@@ -136,8 +136,8 @@ func (r *Repository) List(ctx context.Context, organizationID uuid.UUID, f app.F
 }
 
 // Member returns a member with all periods.
-func (r *Repository) Member(ctx context.Context, organizationID, memberID uuid.UUID, today time.Time) (app.MemberDetail, error) {
-	view, err := scanMember(r.pool.QueryRow(ctx, pageQuery, organizationID, today, "", nil, memberID, "", 1, 0))
+func (r *Repository) Member(ctx context.Context, gymID, memberID uuid.UUID, today time.Time) (app.MemberDetail, error) {
+	view, err := scanMember(r.pool.QueryRow(ctx, pageQuery, gymID, today, "", nil, memberID, "", 1, 0))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.MemberDetail{}, domain.ErrMemberNotFound
 	}
@@ -149,7 +149,7 @@ func (r *Repository) Member(ctx context.Context, organizationID, memberID uuid.U
 		FROM memberships ms
 		LEFT JOIN payments p ON p.membership_id = ms.id
 		LEFT JOIN receipts rc ON rc.id = p.receipt_id
-		WHERE ms.member_id = $1 AND ms.organization_id = $2 ORDER BY ms.starts_on DESC, ms.created_at DESC`, memberID, organizationID)
+		WHERE ms.member_id = $1 AND ms.gym_id = $2 ORDER BY ms.starts_on DESC, ms.created_at DESC`, memberID, gymID)
 	if err != nil {
 		return detail, err
 	}
@@ -195,8 +195,8 @@ func (r *Repository) accessBranches(ctx context.Context, periodIDs []uuid.UUID) 
 	}
 	rows, err := r.pool.Query(ctx, `SELECT mb.membership_id, b.id, COALESCE(g.display_name, g.name) || ' · ' || b.name
 		FROM membership_branches mb
-		JOIN branches b ON b.id = mb.branch_id AND b.organization_id = mb.organization_id
-		JOIN gyms g ON g.id = b.gym_id AND g.organization_id = b.organization_id
+		JOIN branches b ON b.id = mb.branch_id AND b.gym_id = mb.gym_id
+		JOIN gyms g ON g.id = b.gym_id
 		WHERE mb.membership_id = ANY($1) ORDER BY g.name, b.name`, periodIDs)
 	if err != nil {
 		return nil, err
@@ -214,9 +214,9 @@ func (r *Repository) accessBranches(ctx context.Context, periodIDs []uuid.UUID) 
 }
 
 // UpdateMember changes name and phone.
-func (r *Repository) UpdateMember(ctx context.Context, organizationID, memberID uuid.UUID, name, phone string) error {
-	tag, err := r.pool.Exec(ctx, `UPDATE members SET full_name=$3, phone=$4, updated_at=now() WHERE id=$1 AND organization_id=$2`,
-		memberID, organizationID, name, phone)
+func (r *Repository) UpdateMember(ctx context.Context, gymID, memberID uuid.UUID, name, phone string) error {
+	tag, err := r.pool.Exec(ctx, `UPDATE members SET full_name=$3, phone=$4, updated_at=now() WHERE id=$1 AND gym_id=$2`,
+		memberID, gymID, name, phone)
 	if err != nil {
 		return err
 	}
@@ -226,26 +226,26 @@ func (r *Repository) UpdateMember(ctx context.Context, organizationID, memberID 
 	return nil
 }
 
-func insertPeriod(ctx context.Context, t pgx.Tx, org, memberID uuid.UUID, p app.Period) error {
-	if _, err := t.Exec(ctx, `INSERT INTO memberships (id, organization_id, member_id, months, starts_on, ends_on, amount, access_scope)
-		VALUES ($1,$2,$3,$4,$5,$6,$7::numeric,$8)`, p.ID, org, memberID, p.Months, p.StartsOn, p.EndsOn, p.Amount, string(p.Scope)); err != nil {
+func insertPeriod(ctx context.Context, t pgx.Tx, gymID, memberID uuid.UUID, p app.Period) error {
+	if _, err := t.Exec(ctx, `INSERT INTO memberships (id, gym_id, member_id, months, starts_on, ends_on, amount, access_scope)
+		VALUES ($1,$2,$3,$4,$5,$6,$7::numeric,$8)`, p.ID, gymID, memberID, p.Months, p.StartsOn, p.EndsOn, p.Amount, string(p.Scope)); err != nil {
 		return err
 	}
 	for _, branch := range p.BranchIDs {
-		if _, err := t.Exec(ctx, `INSERT INTO membership_branches (membership_id, branch_id, organization_id) VALUES ($1,$2,$3)`, p.ID, branch, org); err != nil {
+		if _, err := t.Exec(ctx, `INSERT INTO membership_branches (membership_id, branch_id, gym_id) VALUES ($1,$2,$3)`, p.ID, branch, gymID); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func sell(ctx context.Context, t pgx.Tx, org, actor, memberID, branch uuid.UUID, p app.Period, method string, today time.Time) error {
-	receiptID, _, err := receipts.Issue(ctx, t, org, receipts.Membership, branch, today)
+func sell(ctx context.Context, t pgx.Tx, gymID, actor, memberID, branch uuid.UUID, p app.Period, method string, today time.Time) error {
+	receiptID, _, err := receipts.Issue(ctx, t, gymID, receipts.Membership, branch, today)
 	if err != nil {
 		return err
 	}
 	return receipts.Record(ctx, t, receipts.Payment{
-		OrganizationID: org, ReceiptID: receiptID, BranchID: branch, Kind: receipts.Membership, Method: method,
+		GymID: gymID, ReceiptID: receiptID, BranchID: branch, Kind: receipts.Membership, Method: method,
 		Amount: p.Amount, PaidOn: today, MemberID: &memberID, MembershipID: &p.ID, CreatedBy: actor,
 	})
 }
@@ -264,7 +264,7 @@ func (r *Repository) Enroll(ctx context.Context, e app.Enrollment) (app.SaleIDs,
 	existed := false
 	err := (tx.Runner{Pool: r.pool}).Run(ctx, func(t pgx.Tx) error {
 		err := t.QueryRow(ctx, `SELECT ms.id FROM members m JOIN memberships ms ON ms.member_id = m.id
-			WHERE m.id = $1 AND m.organization_id = $2 ORDER BY ms.created_at LIMIT 1`, e.MemberID, e.OrganizationID).Scan(&ids.MembershipID)
+			WHERE m.id = $1 AND m.gym_id = $2 ORDER BY ms.created_at LIMIT 1`, e.MemberID, e.GymID).Scan(&ids.MembershipID)
 		if err == nil {
 			existed = true
 			return nil
@@ -272,19 +272,19 @@ func (r *Repository) Enroll(ctx context.Context, e app.Enrollment) (app.SaleIDs,
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		if _, err := t.Exec(ctx, `INSERT INTO members (id, organization_id, home_branch_id, document_type, document_number, full_name, phone)
-			VALUES ($1,$2,$3,$4,$5,$6,$7)`, e.MemberID, e.OrganizationID, e.HomeBranchID, e.DocumentType, e.DocumentNumber, e.FullName, e.Phone); err != nil {
+		if _, err := t.Exec(ctx, `INSERT INTO members (id, gym_id, home_branch_id, document_type, document_number, full_name, phone)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)`, e.MemberID, e.GymID, e.HomeBranchID, e.DocumentType, e.DocumentNumber, e.FullName, e.Phone); err != nil {
 			return err
 		}
-		if err := insertPeriod(ctx, t, e.OrganizationID, e.MemberID, e.Period); err != nil {
+		if err := insertPeriod(ctx, t, e.GymID, e.MemberID, e.Period); err != nil {
 			return err
 		}
-		return sell(ctx, t, e.OrganizationID, e.ActorID, e.MemberID, e.HomeBranchID, e.Period, e.Method, e.Today)
+		return sell(ctx, t, e.GymID, e.ActorID, e.MemberID, e.HomeBranchID, e.Period, e.Method, e.Today)
 	})
 	switch constraintOf(err) {
 	case "members_document_key":
 		var existing uuid.UUID
-		if lookup := r.pool.QueryRow(ctx, `SELECT id FROM members WHERE organization_id=$1 AND document_number=$2`, e.OrganizationID, e.DocumentNumber).Scan(&existing); lookup != nil {
+		if lookup := r.pool.QueryRow(ctx, `SELECT id FROM members WHERE gym_id=$1 AND document_number=$2`, e.GymID, e.DocumentNumber).Scan(&existing); lookup != nil {
 			return ids, false, domain.ErrConflict
 		}
 		return ids, false, &domain.DocumentTakenError{MemberID: existing}
@@ -300,7 +300,7 @@ func (r *Repository) Renew(ctx context.Context, rn app.Renewal, plan app.PlanFun
 	existed := false
 	err := (tx.Runner{Pool: r.pool}).Run(ctx, func(t pgx.Tx) error {
 		var home uuid.UUID
-		err := t.QueryRow(ctx, `SELECT home_branch_id FROM members WHERE id=$1 AND organization_id=$2 FOR UPDATE`, rn.MemberID, rn.OrganizationID).Scan(&home)
+		err := t.QueryRow(ctx, `SELECT home_branch_id FROM members WHERE id=$1 AND gym_id=$2 FOR UPDATE`, rn.MemberID, rn.GymID).Scan(&home)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.ErrMemberNotFound
 		}
@@ -308,7 +308,7 @@ func (r *Repository) Renew(ctx context.Context, rn app.Renewal, plan app.PlanFun
 			return err
 		}
 		if rn.PeriodID != uuid.Nil {
-			err := t.QueryRow(ctx, `SELECT id FROM memberships WHERE id=$1 AND organization_id=$2 AND member_id=$3`, rn.PeriodID, rn.OrganizationID, rn.MemberID).Scan(&ids.MembershipID)
+			err := t.QueryRow(ctx, `SELECT id FROM memberships WHERE id=$1 AND gym_id=$2 AND member_id=$3`, rn.PeriodID, rn.GymID, rn.MemberID).Scan(&ids.MembershipID)
 			if err == nil {
 				existed = true
 				return nil
@@ -326,10 +326,10 @@ func (r *Repository) Renew(ctx context.Context, rn app.Renewal, plan app.PlanFun
 			return err
 		}
 		ids.MembershipID = period.ID
-		if err := insertPeriod(ctx, t, rn.OrganizationID, rn.MemberID, period); err != nil {
+		if err := insertPeriod(ctx, t, rn.GymID, rn.MemberID, period); err != nil {
 			return err
 		}
-		return sell(ctx, t, rn.OrganizationID, rn.ActorID, rn.MemberID, rn.CollectedBranchID, period, rn.Method, rn.Today)
+		return sell(ctx, t, rn.GymID, rn.ActorID, rn.MemberID, rn.CollectedBranchID, period, rn.Method, rn.Today)
 	})
 	if constraintOf(err) == "memberships_pkey" {
 		return ids, false, domain.ErrConflict
@@ -338,11 +338,11 @@ func (r *Repository) Renew(ctx context.Context, rn app.Renewal, plan app.PlanFun
 }
 
 // MemberReceipts lists the receipts of a member, newest first.
-func (r *Repository) MemberReceipts(ctx context.Context, organizationID, memberID uuid.UUID) ([]app.ReceiptSummary, error) {
+func (r *Repository) MemberReceipts(ctx context.Context, gymID, memberID uuid.UUID) ([]app.ReceiptSummary, error) {
 	rows, err := r.pool.Query(ctx, `SELECT rc.id, rc.kind, rc.number, rc.issued_on, COALESCE(ms.months, 0), p.amount::text, p.method
 		FROM payments p JOIN receipts rc ON rc.id = p.receipt_id
 		LEFT JOIN memberships ms ON ms.id = p.membership_id
-		WHERE p.member_id = $1 AND p.organization_id = $2 ORDER BY rc.issued_on DESC, rc.number DESC`, memberID, organizationID)
+		WHERE p.member_id = $1 AND p.gym_id = $2 ORDER BY rc.issued_on DESC, rc.number DESC`, memberID, gymID)
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +363,7 @@ func (r *Repository) MemberReceipts(ctx context.Context, organizationID, memberI
 }
 
 // Receipt returns the printable data of one receipt.
-func (r *Repository) Receipt(ctx context.Context, organizationID, receiptID uuid.UUID) (app.ReceiptDetail, error) {
+func (r *Repository) Receipt(ctx context.Context, gymID, receiptID uuid.UUID) (app.ReceiptDetail, error) {
 	var d app.ReceiptDetail
 	var kind string
 	var number int
@@ -371,10 +371,10 @@ func (r *Repository) Receipt(ctx context.Context, organizationID, receiptID uuid
 	var memberID, membershipID, dayPassID *uuid.UUID
 	err := r.pool.QueryRow(ctx, `SELECT r.id, r.kind, r.number, r.issued_on, g.id, COALESCE(g.display_name, g.name), g.tax_id, g.brand_color,
 			b.name, b.address, p.amount::text, p.method, p.member_id, p.membership_id, p.day_pass_id
-		FROM receipts r JOIN payments p ON p.receipt_id = r.id AND p.organization_id = r.organization_id
-		JOIN branches b ON b.id = r.branch_id AND b.organization_id = r.organization_id
-		JOIN gyms g ON g.id = b.gym_id AND g.organization_id = b.organization_id
-		WHERE r.id = $1 AND r.organization_id = $2`, receiptID, organizationID).
+		FROM receipts r JOIN payments p ON p.receipt_id = r.id AND p.gym_id = r.gym_id
+		JOIN branches b ON b.id = r.branch_id AND b.gym_id = r.gym_id
+		JOIN gyms g ON g.id = b.gym_id
+		WHERE r.id = $1 AND r.gym_id = $2`, receiptID, gymID).
 		Scan(&d.ID, &kind, &number, &issued, &d.Gym.ID, &d.Gym.Name, &d.Gym.TaxID, &d.Gym.BrandColor, &d.Branch.Name, &d.Branch.Address,
 			&d.Payment.Amount, &d.Payment.Method, &memberID, &membershipID, &dayPassID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -386,8 +386,8 @@ func (r *Repository) Receipt(ctx context.Context, organizationID, receiptID uuid
 	d.Kind, d.Number, d.IssuedOn = kind, receipts.Label(receipts.Kind(kind), number), formatDate(issued)
 	if memberID != nil {
 		var m app.ReceiptMember
-		if err := r.pool.QueryRow(ctx, `SELECT full_name, document_type, document_number, phone FROM members WHERE id=$1 AND organization_id=$2`,
-			*memberID, organizationID).Scan(&m.FullName, &m.DocumentType, &m.DocumentNumber, &m.Phone); err != nil {
+		if err := r.pool.QueryRow(ctx, `SELECT full_name, document_type, document_number, phone FROM members WHERE id=$1 AND gym_id=$2`,
+			*memberID, gymID).Scan(&m.FullName, &m.DocumentType, &m.DocumentNumber, &m.Phone); err != nil {
 			return d, err
 		}
 		d.Member = &m
@@ -395,8 +395,8 @@ func (r *Repository) Receipt(ctx context.Context, organizationID, receiptID uuid
 	if dayPassID != nil {
 		// The optional customer of a day pass is shown like a member, when there is anything to show.
 		var kind, number, name, phone *string
-		if err := r.pool.QueryRow(ctx, `SELECT customer_document_type, customer_document_number, customer_name, customer_phone FROM day_passes WHERE id=$1 AND organization_id=$2`,
-			*dayPassID, organizationID).Scan(&kind, &number, &name, &phone); err != nil {
+		if err := r.pool.QueryRow(ctx, `SELECT customer_document_type, customer_document_number, customer_name, customer_phone FROM day_passes WHERE id=$1 AND gym_id=$2`,
+			*dayPassID, gymID).Scan(&kind, &number, &name, &phone); err != nil {
 			return d, err
 		}
 		if name != nil || number != nil || phone != nil {
@@ -416,8 +416,8 @@ func (r *Repository) Receipt(ctx context.Context, organizationID, receiptID uuid
 	if membershipID != nil {
 		var m app.ReceiptMembership
 		var starts, ends time.Time
-		if err := r.pool.QueryRow(ctx, `SELECT months, starts_on, ends_on FROM memberships WHERE id=$1 AND organization_id=$2`,
-			*membershipID, organizationID).Scan(&m.Months, &starts, &ends); err != nil {
+		if err := r.pool.QueryRow(ctx, `SELECT months, starts_on, ends_on FROM memberships WHERE id=$1 AND gym_id=$2`,
+			*membershipID, gymID).Scan(&m.Months, &starts, &ends); err != nil {
 			return d, err
 		}
 		m.PlanLabel, m.StartsOn, m.EndsOn = domain.PlanLabel(m.Months), formatDate(starts), formatDate(ends)

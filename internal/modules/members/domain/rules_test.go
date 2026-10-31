@@ -91,18 +91,16 @@ func TestAccessBranches(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{a1.ID, a2.ID}, got)
 
-	got, err = AccessBranches(ScopeNetwork, a1, all, nil)
+	got, err = AccessBranches(ScopeGym, a1, all, []uuid.UUID{a1.ID, a2.ID, a2.ID})
 	require.NoError(t, err)
-	assert.Len(t, got, 3)
+	assert.Equal(t, []uuid.UUID{a1.ID, a2.ID}, got)
 
-	got, err = AccessBranches(ScopeNetwork, a1, all, []uuid.UUID{a1.ID, b1.ID, b1.ID})
-	require.NoError(t, err)
-	assert.Equal(t, []uuid.UUID{a1.ID, b1.ID}, got)
+	assert.False(t, Scope("network").Valid(), "the network scope no longer exists")
 
 	_, err = AccessBranches(ScopeGym, a1, all, []uuid.UUID{a1.ID, b1.ID})
 	assert.ErrorIs(t, err, ErrAccessBranches, "outside the scope")
-	_, err = AccessBranches(ScopeNetwork, a1, all, []uuid.UUID{a2.ID})
+	_, err = AccessBranches(ScopeGym, a1, all, []uuid.UUID{a2.ID})
 	assert.ErrorIs(t, err, ErrAccessBranches, "home branch missing")
-	_, err = AccessBranches(ScopeNetwork, a1, all, []uuid.UUID{a1.ID, uuid.New()})
+	_, err = AccessBranches(ScopeGym, a1, all, []uuid.UUID{a1.ID, uuid.New()})
 	assert.ErrorIs(t, err, ErrAccessBranches, "foreign branch")
 }

@@ -16,9 +16,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/AtmosferaSoltec/atm-pulso-api/db"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/authapi"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/gymlogo"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/identity"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/storageapi"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/access"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
@@ -44,6 +48,8 @@ const (
 	identityTimeout = 6 * time.Second
 	// authTimeout bounds each call to atm-auth-api.
 	authTimeout = 6 * time.Second
+	// storageTimeout bounds each call to atm-storage-api.
+	storageTimeout = 3 * time.Second
 )
 
 func main() {
@@ -115,7 +121,16 @@ func run() int {
 	} else {
 		log.Warn("AUTH_CLIENT_SECRET is not set: company names and team management are unavailable")
 	}
-	accountsModule := accounts.New(accounts.Deps{Pool: pool, Clock: clock.System{}, Auth: authClient})
+
+	// Gym logos: company profile (atm-auth-api) -> file id -> temporary signed link (atm-storage-api).
+	// Without the service secret there is no logo; if either service fails later, logo_url is null.
+	var logos interface {
+		LogoURL(ctx context.Context, tenantID uuid.UUID) *string
+	}
+	if httpAuth, ok := authClient.(*authapi.HTTPClient); ok {
+		logos = gymlogo.New(authClient, storageapi.NewHTTPClient(cfg.StorageAPI.URL, httpAuth, storageTimeout), log)
+	}
+	accountsModule := accounts.New(accounts.Deps{Pool: pool, Clock: clock.System{}, Auth: authClient, Logos: logos})
 
 	// Without an API key (development) a fake answers instead of identity-api.
 	var identityClient identity.Client = identity.Fake{}
@@ -134,7 +149,7 @@ func run() int {
 	// The platform administrator (console-web) has its own, rate-limited surface.
 	heavy := middleware.NewRateLimiter(cfg.LoginRateLimitPerMinute).Middleware()
 	accountsModule.AdminRoutes(api.Group("/admin", heavy, guard.Superadmin()))
-	members.New(members.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	members.New(members.Deps{Pool: pool, Clock: clock.System{}, Logos: logos}).Routes(protected)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
 	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected)
 	// The CSV download is heavy: it shares the tighter per-IP limit.

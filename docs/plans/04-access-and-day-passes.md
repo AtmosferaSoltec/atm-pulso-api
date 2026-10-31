@@ -1,5 +1,7 @@
 # API-04: access control and day passes
 
+> **Superseded by [plan 07](07-groups-and-gym-scoped-members.md):** "organization", "owner", "client" and "network" scope in this plan are replaced by group (internal label), no owner, and gym-scoped members; the tenant key is now `gym_id`.
+
 **Depends on:** API-03. **Unlocks:** WEB-04. **Rules:** business-rules §11, §12, §13.
 
 ## Goal

@@ -17,6 +17,8 @@ import (
 type Deps struct {
 	Pool  *pgxpool.Pool
 	Clock clock.Clock
+	// Logos resolves gym logos; nil when storage is not configured.
+	Logos app.LogoResolver
 }
 
 // Module is the assembled members module.
@@ -24,7 +26,7 @@ type Module struct{ handler *membershttp.Handler }
 
 // New wires repository, directory, use cases and HTTP by hand.
 func New(deps Deps) *Module {
-	service := &app.Service{Repo: postgres.NewRepository(deps.Pool), Directory: branchdir.New(deps.Pool), Clock: deps.Clock}
+	service := &app.Service{Repo: postgres.NewRepository(deps.Pool), Directory: branchdir.New(deps.Pool), Logos: deps.Logos, Clock: deps.Clock}
 	return &Module{handler: membershttp.NewHandler(service)}
 }
 

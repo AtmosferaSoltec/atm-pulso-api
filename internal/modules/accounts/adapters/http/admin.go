@@ -10,10 +10,13 @@ import (
 )
 
 // AdminRoutes mounts the platform administrator's routes (behind auth.Guard.Superadmin).
-// console-web calls them: clients and gyms come from atm-auth-api, branches are created here
+// console-web calls them: gyms come from atm-auth-api companies, groups and branches are created here
 // because Atmósfera charges for each one.
 func (h *Handler) AdminRoutes(admin gin.IRoutes) {
-	admin.GET("/clients", h.listClients)
+	admin.GET("/groups", h.listGroups)
+	admin.POST("/groups", h.createGroup)
+	admin.PATCH("/groups/:id", h.renameGroup)
+	admin.DELETE("/groups/:id", h.deleteGroup)
 	admin.PATCH("/gyms/:gym_id", h.updateGymIdentity)
 	admin.POST("/gyms/:gym_id/branches", h.addBranch)
 	admin.PATCH("/branches/:id", h.updateBranch)
@@ -26,13 +29,62 @@ func audit(c *gin.Context, action string, attrs ...any) {
 	logger.From(c.Request.Context()).Info("admin action", append([]any{"action", action, "admin_id", claims.Subject}, attrs...)...)
 }
 
-func (h *Handler) listClients(c *gin.Context) {
-	clients, err := h.service.ListClients(c.Request.Context())
+func (h *Handler) listGroups(c *gin.Context) {
+	groups, err := h.service.ListGroups(c.Request.Context())
 	if err != nil {
 		respond(c, err)
 		return
 	}
-	apierror.OK(c, clients)
+	apierror.OK(c, groups)
+}
+
+type groupRequest struct {
+	Name string `json:"name"`
+}
+
+func (h *Handler) createGroup(c *gin.Context) {
+	var req groupRequest
+	if !bind(c, &req) {
+		return
+	}
+	group, err := h.service.CreateGroup(c.Request.Context(), req.Name)
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	audit(c, "group.create", "group_id", group.ID)
+	apierror.Created(c, group)
+}
+
+func (h *Handler) renameGroup(c *gin.Context) {
+	id, ok := pathID(c, "id")
+	if !ok {
+		return
+	}
+	var req groupRequest
+	if !bind(c, &req) {
+		return
+	}
+	group, err := h.service.RenameGroup(c.Request.Context(), id, req.Name)
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	audit(c, "group.rename", "group_id", id)
+	apierror.OK(c, group)
+}
+
+func (h *Handler) deleteGroup(c *gin.Context) {
+	id, ok := pathID(c, "id")
+	if !ok {
+		return
+	}
+	if err := h.service.DeleteGroup(c.Request.Context(), id); err != nil {
+		respond(c, err)
+		return
+	}
+	audit(c, "group.delete", "group_id", id)
+	apierror.NoContent(c)
 }
 
 func (h *Handler) updateGymIdentity(c *gin.Context) {

@@ -125,7 +125,7 @@ func TestDashboardFiguresAndRoles(t *testing.T) {
 	reception := h.token(t, tn.Receptionist)
 	today := limaToday()
 
-	// A new organization shows zeros, not sample data.
+	// A new gym shows zeros, not sample data.
 	empty := h.call(t, http.MethodGet, "/dashboard", h.token(t, other.Admin), nil)
 	require.Equal(t, 200, empty.status, empty.body)
 	assert.Equal(t, iso(today), empty.data()["date"])

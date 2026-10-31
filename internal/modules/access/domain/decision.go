@@ -86,7 +86,7 @@ func Decide(periods []Period, branchID, homeBranch uuid.UUID, homeGymSharing boo
 }
 
 var (
-	// ErrMemberNotFound: the member id does not exist in the organization.
+	// ErrMemberNotFound: the member id does not exist in the gym.
 	ErrMemberNotFound = errors.New("member not found")
 	// ErrBranchNotAccessible: the user cannot work in that branch.
 	ErrBranchNotAccessible = errors.New("branch not accessible")

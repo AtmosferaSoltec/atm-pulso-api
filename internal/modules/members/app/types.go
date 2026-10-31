@@ -12,14 +12,14 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/branchdir"
 )
 
-// BranchInfo is a branch of the organization with its gym.
+// BranchInfo is a branch of the gym with its gym.
 type BranchInfo = branchdir.Info
 
-// Directory reads the organization's branches (owned by the accounts module; read-only).
+// Directory reads the gym's branches (owned by the accounts module; read-only).
 type Directory interface {
-	// Branch returns branchdir.ErrNotFound when it is not in the organization.
-	Branch(ctx context.Context, organizationID, branchID uuid.UUID) (BranchInfo, error)
-	Branches(ctx context.Context, organizationID uuid.UUID) ([]BranchInfo, error)
+	// Branch returns branchdir.ErrNotFound when it is not in the gym.
+	Branch(ctx context.Context, gymID, branchID uuid.UUID) (BranchInfo, error)
+	Branches(ctx context.Context, gymID uuid.UUID) ([]BranchInfo, error)
 }
 
 // MemberView is a member as listed.
@@ -122,7 +122,7 @@ type ReceiptDetail struct {
 		Name       string    `json:"name"`
 		TaxID      *string   `json:"tax_id"`
 		BrandColor string    `json:"brand_color"`
-		// LogoURL is null until the logo comes from the company profile of atm-auth-api.
+		// LogoURL is a temporary signed address of the logo in the company profile; null when none.
 		LogoURL *string `json:"logo_url"`
 	} `json:"gym"`
 	Branch struct {
@@ -174,7 +174,7 @@ type Period struct {
 
 // Enrollment is a new member with the first period, payment and receipt.
 type Enrollment struct {
-	OrganizationID uuid.UUID
+	GymID          uuid.UUID
 	ActorID        uuid.UUID
 	MemberID       uuid.UUID
 	HomeBranchID   uuid.UUID
@@ -189,7 +189,7 @@ type Enrollment struct {
 
 // Renewal is a new period for an existing member, collected at CollectedBranchID.
 type Renewal struct {
-	OrganizationID    uuid.UUID
+	GymID             uuid.UUID
 	ActorID           uuid.UUID
 	MemberID          uuid.UUID
 	PeriodID          uuid.UUID
@@ -209,13 +209,13 @@ type SaleIDs struct {
 
 // Repository is the persistence port.
 type Repository interface {
-	List(ctx context.Context, organizationID uuid.UUID, filter Filter, today time.Time) (ListResult, error)
-	Member(ctx context.Context, organizationID, memberID uuid.UUID, today time.Time) (MemberDetail, error)
-	UpdateMember(ctx context.Context, organizationID, memberID uuid.UUID, name, phone string) error
+	List(ctx context.Context, gymID uuid.UUID, filter Filter, today time.Time) (ListResult, error)
+	Member(ctx context.Context, gymID, memberID uuid.UUID, today time.Time) (MemberDetail, error)
+	UpdateMember(ctx context.Context, gymID, memberID uuid.UUID, name, phone string) error
 	// Enroll stores everything in one transaction. existed is true when the same id was
 	// already enrolled (idempotent repeat). domain.DocumentTakenError when the document is used.
 	Enroll(ctx context.Context, e Enrollment) (ids SaleIDs, existed bool, err error)
 	Renew(ctx context.Context, r Renewal, plan PlanFunc) (ids SaleIDs, existed bool, err error)
-	MemberReceipts(ctx context.Context, organizationID, memberID uuid.UUID) ([]ReceiptSummary, error)
-	Receipt(ctx context.Context, organizationID, receiptID uuid.UUID) (ReceiptDetail, error)
+	MemberReceipts(ctx context.Context, gymID, memberID uuid.UUID) ([]ReceiptSummary, error)
+	Receipt(ctx context.Context, gymID, receiptID uuid.UUID) (ReceiptDetail, error)
 }

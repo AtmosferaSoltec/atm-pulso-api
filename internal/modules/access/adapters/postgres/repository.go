@@ -32,14 +32,14 @@ func dayStart(d time.Time) time.Time { return d.Add(limaOffset) }
 func dayEnd(d time.Time) time.Time   { return d.AddDate(0, 0, 1).Add(limaOffset) }
 
 // Member finds a member by id or document with every period and the branches it opens.
-func (r *Repository) Member(ctx context.Context, organizationID uuid.UUID, id *uuid.UUID, document string) (app.MemberAccess, error) {
+func (r *Repository) Member(ctx context.Context, gymID uuid.UUID, id *uuid.UUID, document string) (app.MemberAccess, error) {
 	var m app.MemberAccess
 	err := r.pool.QueryRow(ctx, `SELECT m.id, m.full_name, m.document_number, m.home_branch_id, g.branch_sharing
 		FROM members m
-		JOIN branches b ON b.id = m.home_branch_id AND b.organization_id = m.organization_id
-		JOIN gyms g ON g.id = b.gym_id AND g.organization_id = b.organization_id
-		WHERE m.organization_id = $1 AND (($2::uuid IS NOT NULL AND m.id = $2) OR ($2::uuid IS NULL AND m.document_number = $3))`,
-		organizationID, id, document).Scan(&m.ID, &m.FullName, &m.DocumentNumber, &m.HomeBranchID, &m.HomeSharing)
+		JOIN branches b ON b.id = m.home_branch_id AND b.gym_id = m.gym_id
+		JOIN gyms g ON g.id = b.gym_id
+		WHERE m.gym_id = $1 AND (($2::uuid IS NOT NULL AND m.id = $2) OR ($2::uuid IS NULL AND m.document_number = $3))`,
+		gymID, id, document).Scan(&m.ID, &m.FullName, &m.DocumentNumber, &m.HomeBranchID, &m.HomeSharing)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return m, domain.ErrMemberNotFound
 	}
@@ -49,7 +49,7 @@ func (r *Repository) Member(ctx context.Context, organizationID uuid.UUID, id *u
 	rows, err := r.pool.Query(ctx, `SELECT ms.starts_on, ms.ends_on,
 			COALESCE(array_agg(mb.branch_id) FILTER (WHERE mb.branch_id IS NOT NULL), '{}')
 		FROM memberships ms LEFT JOIN membership_branches mb ON mb.membership_id = ms.id
-		WHERE ms.member_id = $1 AND ms.organization_id = $2 GROUP BY ms.id`, m.ID, organizationID)
+		WHERE ms.member_id = $1 AND ms.gym_id = $2 GROUP BY ms.id`, m.ID, gymID)
 	if err != nil {
 		return m, err
 	}
@@ -64,13 +64,13 @@ func (r *Repository) Member(ctx context.Context, organizationID uuid.UUID, id *u
 	return m, rows.Err()
 }
 
-const entryColumns = `id, organization_id, branch_id, member_id, display_name, document_number, allowed, reason_code, kind, ends_on, expiring_in_days, checked_by, checked_at`
+const entryColumns = `id, gym_id, branch_id, member_id, display_name, document_number, allowed, reason_code, kind, ends_on, expiring_in_days, checked_by, checked_at`
 
 // Entry returns one access entry.
-func (r *Repository) Entry(ctx context.Context, organizationID, id uuid.UUID) (app.Entry, error) {
+func (r *Repository) Entry(ctx context.Context, gymID, id uuid.UUID) (app.Entry, error) {
 	var e app.Entry
-	err := r.pool.QueryRow(ctx, `SELECT `+entryColumns+` FROM access_entries WHERE id=$1 AND organization_id=$2`, id, organizationID).
-		Scan(&e.ID, &e.OrganizationID, &e.BranchID, &e.MemberID, &e.DisplayName, &e.DocumentNumber, &e.Allowed, &e.Reason, &e.Kind, &e.EndsOn, &e.ExpiringInDays, &e.CheckedBy, &e.CheckedAt)
+	err := r.pool.QueryRow(ctx, `SELECT `+entryColumns+` FROM access_entries WHERE id=$1 AND gym_id=$2`, id, gymID).
+		Scan(&e.ID, &e.GymID, &e.BranchID, &e.MemberID, &e.DisplayName, &e.DocumentNumber, &e.Allowed, &e.Reason, &e.Kind, &e.EndsOn, &e.ExpiringInDays, &e.CheckedBy, &e.CheckedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, domain.ErrNotFound
 	}
@@ -80,9 +80,9 @@ func (r *Repository) Entry(ctx context.Context, organizationID, id uuid.UUID) (a
 func insertEntry(ctx context.Context, q interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 }, e app.Entry) error {
-	_, err := q.Exec(ctx, `INSERT INTO access_entries (id, organization_id, branch_id, member_id, display_name, document_number, allowed, reason_code, kind, ends_on, expiring_in_days, checked_by)
+	_, err := q.Exec(ctx, `INSERT INTO access_entries (id, gym_id, branch_id, member_id, display_name, document_number, allowed, reason_code, kind, ends_on, expiring_in_days, checked_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-		e.ID, e.OrganizationID, e.BranchID, e.MemberID, e.DisplayName, e.DocumentNumber, e.Allowed, e.Reason, e.Kind, e.EndsOn, e.ExpiringInDays, e.CheckedBy)
+		e.ID, e.GymID, e.BranchID, e.MemberID, e.DisplayName, e.DocumentNumber, e.Allowed, e.Reason, e.Kind, e.EndsOn, e.ExpiringInDays, e.CheckedBy)
 	if isUnique(err) {
 		return domain.ErrConflict
 	}
@@ -117,14 +117,14 @@ func bounds(from, to *time.Time) (*time.Time, *time.Time) {
 }
 
 // Events lists the history of the given branches.
-func (r *Repository) Events(ctx context.Context, organizationID uuid.UUID, f app.EventFilter) ([]app.EventView, int, error) {
+func (r *Repository) Events(ctx context.Context, gymID uuid.UUID, f app.EventFilter) ([]app.EventView, int, error) {
 	start, end := bounds(f.From, f.To)
-	const where = `FROM access_entries e JOIN branches b ON b.id = e.branch_id AND b.organization_id = e.organization_id
-		WHERE e.organization_id = $1 AND e.branch_id = ANY($2)
+	const where = `FROM access_entries e JOIN branches b ON b.id = e.branch_id AND b.gym_id = e.gym_id
+		WHERE e.gym_id = $1 AND e.branch_id = ANY($2)
 		AND ($3::text = '' OR e.allowed = ($3 = 'allowed'))
 		AND ($4::timestamptz IS NULL OR e.checked_at >= $4) AND ($5::timestamptz IS NULL OR e.checked_at < $5)
 		AND ($6::text = '' OR e.display_name ILIKE '%' || $6 || '%' OR e.document_number LIKE '%' || $6 || '%')`
-	args := []any{organizationID, f.BranchIDs, f.Result, start, end, like(f.Query)}
+	args := []any{gymID, f.BranchIDs, f.Result, start, end, like(f.Query)}
 	var total int
 	if err := r.pool.QueryRow(ctx, `SELECT count(*) `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -147,18 +147,18 @@ func (r *Repository) Events(ctx context.Context, organizationID uuid.UUID, f app
 }
 
 // Summary counts checks and day passes between two Lima dates (inclusive).
-func (r *Repository) Summary(ctx context.Context, organizationID uuid.UUID, branchIDs []uuid.UUID, from, to time.Time) (app.Summary, error) {
+func (r *Repository) Summary(ctx context.Context, gymID uuid.UUID, branchIDs []uuid.UUID, from, to time.Time) (app.Summary, error) {
 	var s app.Summary
 	start, end := dayStart(from), dayEnd(to)
 	err := r.pool.QueryRow(ctx, `SELECT
 		count(*) FILTER (WHERE kind = 'check' AND allowed), count(*) FILTER (WHERE kind = 'check' AND NOT allowed)
-		FROM access_entries WHERE organization_id = $1 AND branch_id = ANY($2) AND checked_at >= $3 AND checked_at < $4`,
-		organizationID, branchIDs, start, end).Scan(&s.Allowed, &s.Denied)
+		FROM access_entries WHERE gym_id = $1 AND branch_id = ANY($2) AND checked_at >= $3 AND checked_at < $4`,
+		gymID, branchIDs, start, end).Scan(&s.Allowed, &s.Denied)
 	if err != nil {
 		return s, err
 	}
-	err = r.pool.QueryRow(ctx, `SELECT count(*) FROM day_passes WHERE organization_id = $1 AND branch_id = ANY($2) AND created_at >= $3 AND created_at < $4`,
-		organizationID, branchIDs, start, end).Scan(&s.DayPasses)
+	err = r.pool.QueryRow(ctx, `SELECT count(*) FROM day_passes WHERE gym_id = $1 AND branch_id = ANY($2) AND created_at >= $3 AND created_at < $4`,
+		gymID, branchIDs, start, end).Scan(&s.DayPasses)
 	return s, err
 }
 
@@ -175,7 +175,7 @@ func (r *Repository) SellDayPass(ctx context.Context, sale app.DayPassSale) (boo
 	existed := false
 	err := (tx.Runner{Pool: r.pool}).Run(ctx, func(t pgx.Tx) error {
 		var one int
-		err := t.QueryRow(ctx, `SELECT 1 FROM day_passes WHERE id=$1 AND organization_id=$2`, sale.ID, sale.OrganizationID).Scan(&one)
+		err := t.QueryRow(ctx, `SELECT 1 FROM day_passes WHERE id=$1 AND gym_id=$2`, sale.ID, sale.GymID).Scan(&one)
 		if err == nil {
 			existed = true
 			return nil
@@ -183,17 +183,17 @@ func (r *Repository) SellDayPass(ctx context.Context, sale app.DayPassSale) (boo
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		receiptID, _, err := receipts.Issue(ctx, t, sale.OrganizationID, receipts.DayPass, sale.BranchID, sale.Today)
+		receiptID, _, err := receipts.Issue(ctx, t, sale.GymID, receipts.DayPass, sale.BranchID, sale.Today)
 		if err != nil {
 			return err
 		}
 		v := sale.Visitor
-		if _, err := t.Exec(ctx, `INSERT INTO day_passes (id, organization_id, branch_id, receipt_id, amount, method, customer_document_type, customer_document_number, customer_name, customer_phone, created_by)
-			VALUES ($1,$2,$3,$4,$5::numeric,$6,$7,$8,$9,$10,$11)`, sale.ID, sale.OrganizationID, sale.BranchID, receiptID, sale.Amount, sale.Method,
+		if _, err := t.Exec(ctx, `INSERT INTO day_passes (id, gym_id, branch_id, receipt_id, amount, method, customer_document_type, customer_document_number, customer_name, customer_phone, created_by)
+			VALUES ($1,$2,$3,$4,$5::numeric,$6,$7,$8,$9,$10,$11)`, sale.ID, sale.GymID, sale.BranchID, receiptID, sale.Amount, sale.Method,
 			nullable(v.DocumentType), nullable(v.DocumentNumber), nullable(strings.Join(strings.Fields(v.FullName), " ")), nullable(v.Phone), sale.ActorID); err != nil {
 			return err
 		}
-		if err := receipts.Record(ctx, t, receipts.Payment{OrganizationID: sale.OrganizationID, ReceiptID: receiptID, BranchID: sale.BranchID, Kind: receipts.DayPass,
+		if err := receipts.Record(ctx, t, receipts.Payment{GymID: sale.GymID, ReceiptID: receiptID, BranchID: sale.BranchID, Kind: receipts.DayPass,
 			Method: sale.Method, Amount: sale.Amount, PaidOn: sale.Today, DayPassID: &sale.ID, CreatedBy: sale.ActorID}); err != nil {
 			return err
 		}
@@ -201,7 +201,7 @@ func (r *Repository) SellDayPass(ctx context.Context, sale app.DayPassSale) (boo
 		if n := nullable(strings.Join(strings.Fields(v.FullName), " ")); n != nil {
 			name = *n
 		}
-		return insertEntry(ctx, t, app.Entry{ID: uuid.New(), OrganizationID: sale.OrganizationID, BranchID: sale.BranchID, DisplayName: name,
+		return insertEntry(ctx, t, app.Entry{ID: uuid.New(), GymID: sale.GymID, BranchID: sale.BranchID, DisplayName: name,
 			DocumentNumber: nullable(v.DocumentNumber), Allowed: true, Reason: domain.ReasonDayPass, Kind: "day_pass", CheckedBy: sale.ActorID})
 	})
 	if isUnique(err) {
@@ -211,8 +211,8 @@ func (r *Repository) SellDayPass(ctx context.Context, sale app.DayPassSale) (boo
 }
 
 const dayPassSelect = `SELECT d.id, r.id, r.number, b.id, b.name, d.amount::text, d.method, d.customer_name, d.created_at
-	FROM day_passes d JOIN receipts r ON r.id = d.receipt_id AND r.organization_id = d.organization_id
-	JOIN branches b ON b.id = d.branch_id AND b.organization_id = d.organization_id`
+	FROM day_passes d JOIN receipts r ON r.id = d.receipt_id AND r.gym_id = d.gym_id
+	JOIN branches b ON b.id = d.branch_id AND b.gym_id = d.gym_id`
 
 func scanDayPass(row pgx.Row) (app.DayPassView, error) {
 	var v app.DayPassView
@@ -223,8 +223,8 @@ func scanDayPass(row pgx.Row) (app.DayPassView, error) {
 }
 
 // DayPass returns one day pass.
-func (r *Repository) DayPass(ctx context.Context, organizationID, id uuid.UUID) (app.DayPassView, error) {
-	v, err := scanDayPass(r.pool.QueryRow(ctx, dayPassSelect+` WHERE d.id = $1 AND d.organization_id = $2`, id, organizationID))
+func (r *Repository) DayPass(ctx context.Context, gymID, id uuid.UUID) (app.DayPassView, error) {
+	v, err := scanDayPass(r.pool.QueryRow(ctx, dayPassSelect+` WHERE d.id = $1 AND d.gym_id = $2`, id, gymID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return v, domain.ErrNotFound
 	}
@@ -232,16 +232,16 @@ func (r *Repository) DayPass(ctx context.Context, organizationID, id uuid.UUID) 
 }
 
 // DayPasses lists day passes of the given branches, newest first.
-func (r *Repository) DayPasses(ctx context.Context, organizationID uuid.UUID, f app.DayPassFilter) ([]app.DayPassView, int, error) {
+func (r *Repository) DayPasses(ctx context.Context, gymID uuid.UUID, f app.DayPassFilter) ([]app.DayPassView, int, error) {
 	start, end := bounds(f.From, f.To)
-	const where = ` WHERE d.organization_id = $1 AND d.branch_id = ANY($2)
+	const where = ` WHERE d.gym_id = $1 AND d.branch_id = ANY($2)
 		AND ($3::timestamptz IS NULL OR d.created_at >= $3) AND ($4::timestamptz IS NULL OR d.created_at < $4)`
 	var total int
-	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM day_passes d`+where, organizationID, f.BranchIDs, start, end).Scan(&total); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM day_passes d`+where, gymID, f.BranchIDs, start, end).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := r.pool.Query(ctx, dayPassSelect+where+` ORDER BY d.created_at DESC, d.id DESC LIMIT $5 OFFSET $6`,
-		organizationID, f.BranchIDs, start, end, f.PageSize, (f.Page-1)*f.PageSize)
+		gymID, f.BranchIDs, start, end, f.PageSize, (f.Page-1)*f.PageSize)
 	if err != nil {
 		return nil, 0, err
 	}

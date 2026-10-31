@@ -12,10 +12,10 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 )
 
-// Tenancy is the organization and gym a token belongs to.
+// Tenancy is the group and gym a token belongs to. The gym is the tenant; the group is informational.
 type Tenancy struct {
-	OrganizationID uuid.UUID
-	GymID          uuid.UUID
+	GroupID uuid.UUID
+	GymID   uuid.UUID
 }
 
 // TenancyInput is what a token (or the company list of atm-auth-api) says about the
@@ -29,18 +29,18 @@ type TenancyInput struct {
 	RefreshNames bool
 }
 
-// TenancyRepository stores organizations (auth clients) and gyms (auth companies).
+// TenancyRepository stores gyms (auth companies) and the groups they are placed in.
 type TenancyRepository interface {
 	// FindTenancy returns domain.ErrResourceNotFound when the gym is not known yet.
 	FindTenancy(ctx context.Context, clientID, tenantID uuid.UUID) (Tenancy, error)
-	// EnsureTenancy creates what is missing: the organization, and the gym with its default
-	// branch. It returns domain.ErrConflict when the company already belongs to another client.
+	// EnsureTenancy creates what is missing: the gym with its default branch, in the group that already
+	// holds a gym of the same auth client or in a new group named after the client. It returns
+	// domain.ErrConflict when the company already belongs to another client.
 	EnsureTenancy(ctx context.Context, in TenancyInput) (Tenancy, error)
 }
 
 // UserInput is a person as atm-auth-api describes them, for one gym.
 type UserInput struct {
-	OrganizationID uuid.UUID
 	GymID          uuid.UUID
 	AuthUserID     uuid.UUID
 	DocumentNumber string
@@ -62,16 +62,9 @@ type UserRepository interface {
 
 // Scope names where a person works, for the web to show.
 type Scope struct {
-	Organization Named
-	Gym          GymSummary
+	Gym GymSummary
 	// Branches are all the branches of the gym for an admin, the assigned ones for reception.
 	Branches []BranchRef
-}
-
-// Named is an entity with its id and display name.
-type Named struct {
-	ID   uuid.UUID
-	Name string
 }
 
 // GymSummary is the current gym with its look.
@@ -112,6 +105,13 @@ type NewDirectoryMember struct {
 	DocumentNumber string
 	FullName       string
 	Role           string
+}
+
+// LogoResolver gives the temporary address of a gym's logo, which lives in the company profile of
+// atm-auth-api and in atm-storage-api. It returns nil when the gym has no logo or it cannot be
+// resolved right now; it never fails the request. The tenant always comes from the principal.
+type LogoResolver interface {
+	LogoURL(ctx context.Context, tenantID uuid.UUID) *string
 }
 
 // Directory is atm-auth-api as the accounts module needs it. Its adapter turns failures into

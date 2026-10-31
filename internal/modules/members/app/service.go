@@ -20,7 +20,15 @@ import (
 type Service struct {
 	Repo      Repository
 	Directory Directory
-	Clock     clock.Clock
+	// Logos may be nil (development without storage): the logo is then null.
+	Logos LogoResolver
+	Clock clock.Clock
+}
+
+// LogoResolver gives the temporary address of a gym's logo (see the accounts module); nil when none or
+// unavailable. The tenant always comes from the principal.
+type LogoResolver interface {
+	LogoURL(ctx context.Context, tenantID uuid.UUID) *string
 }
 
 // EnrollInput is the body of POST /members.
@@ -73,9 +81,9 @@ func normalizeAmount(raw string) (string, bool) {
 
 func (s *Service) today() time.Time { return clock.LimaDate(s.Clock.Now()) }
 
-// branchFor resolves a branch of the caller's organization the caller may work in.
+// branchFor resolves a branch of the caller's gym the caller may work in.
 func (s *Service) branchFor(ctx context.Context, p auth.Principal, branchID uuid.UUID) (BranchInfo, error) {
-	branch, err := s.Directory.Branch(ctx, p.OrganizationID, branchID)
+	branch, err := s.Directory.Branch(ctx, p.GymID, branchID)
 	if err != nil {
 		return BranchInfo{}, err
 	}
@@ -85,19 +93,19 @@ func (s *Service) branchFor(ctx context.Context, p auth.Principal, branchID uuid
 	return branch, nil
 }
 
-// List is the shared directory of the organization.
+// List is the shared directory of the gym.
 func (s *Service) List(ctx context.Context, p auth.Principal, f Filter) (ListResult, error) {
-	return s.Repo.List(ctx, p.OrganizationID, f, s.today())
+	return s.Repo.List(ctx, p.GymID, f, s.today())
 }
 
 // Get returns a member with every period.
 func (s *Service) Get(ctx context.Context, p auth.Principal, id uuid.UUID) (MemberDetail, error) {
-	return s.Repo.Member(ctx, p.OrganizationID, id, s.today())
+	return s.Repo.Member(ctx, p.GymID, id, s.today())
 }
 
 // Update changes name and phone only.
 func (s *Service) Update(ctx context.Context, p auth.Principal, id uuid.UUID, name, phone *string) (MemberDetail, error) {
-	current, err := s.Repo.Member(ctx, p.OrganizationID, id, s.today())
+	current, err := s.Repo.Member(ctx, p.GymID, id, s.today())
 	if err != nil {
 		return MemberDetail{}, err
 	}
@@ -120,10 +128,10 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, id uuid.UUID, na
 	if len(issues) > 0 {
 		return MemberDetail{}, &domain.ValidationError{Issues: issues}
 	}
-	if err := s.Repo.UpdateMember(ctx, p.OrganizationID, id, newName, newPhone); err != nil {
+	if err := s.Repo.UpdateMember(ctx, p.GymID, id, newName, newPhone); err != nil {
 		return MemberDetail{}, err
 	}
-	return s.Repo.Member(ctx, p.OrganizationID, id, s.today())
+	return s.Repo.Member(ctx, p.GymID, id, s.today())
 }
 
 // parseStart returns the start date, today when empty.
@@ -188,7 +196,7 @@ func (s *Service) Enroll(ctx context.Context, p auth.Principal, in EnrollInput) 
 	if scope == "" {
 		scope = domain.ScopeBranch
 	}
-	all, err := s.Directory.Branches(ctx, p.OrganizationID)
+	all, err := s.Directory.Branches(ctx, p.GymID)
 	if err != nil {
 		return Sale{}, false, err
 	}
@@ -201,7 +209,7 @@ func (s *Service) Enroll(ctx context.Context, p auth.Principal, in EnrollInput) 
 		memberID = ids.New()
 	}
 	saleIDs, existed, err := s.Repo.Enroll(ctx, Enrollment{
-		OrganizationID: p.OrganizationID, ActorID: p.UserID, MemberID: memberID, HomeBranchID: home.ID,
+		GymID: p.GymID, ActorID: p.UserID, MemberID: memberID, HomeBranchID: home.ID,
 		DocumentType: in.DocumentType, DocumentNumber: in.DocumentNumber, FullName: name, Phone: in.Phone,
 		Period: Period{ID: ids.New(), Months: in.Months, StartsOn: start, EndsOn: domain.EndDate(start, in.Months),
 			Amount: amount, Scope: scope, BranchIDs: branchIDs},
@@ -210,7 +218,7 @@ func (s *Service) Enroll(ctx context.Context, p auth.Principal, in EnrollInput) 
 	if err != nil {
 		return Sale{}, false, err
 	}
-	sale, err := s.sale(ctx, p.OrganizationID, saleIDs)
+	sale, err := s.sale(ctx, p.GymID, saleIDs)
 	return sale, existed, err
 }
 
@@ -228,7 +236,7 @@ func (s *Service) Renew(ctx context.Context, p auth.Principal, memberID uuid.UUI
 	if err != nil {
 		return Sale{}, false, err
 	}
-	all, err := s.Directory.Branches(ctx, p.OrganizationID)
+	all, err := s.Directory.Branches(ctx, p.GymID)
 	if err != nil {
 		return Sale{}, false, err
 	}
@@ -263,18 +271,18 @@ func (s *Service) Renew(ctx context.Context, p auth.Principal, memberID uuid.UUI
 			Amount: amount, Scope: scope, BranchIDs: branchIDs}, nil
 	}
 	saleIDs, existed, err := s.Repo.Renew(ctx, Renewal{
-		OrganizationID: p.OrganizationID, ActorID: p.UserID, MemberID: memberID, PeriodID: in.ID,
+		GymID: p.GymID, ActorID: p.UserID, MemberID: memberID, PeriodID: in.ID,
 		CollectedBranchID: collected.ID, Method: in.Method, Today: today,
 	}, plan)
 	if err != nil {
 		return Sale{}, false, err
 	}
-	sale, err := s.sale(ctx, p.OrganizationID, saleIDs)
+	sale, err := s.sale(ctx, p.GymID, saleIDs)
 	return sale, existed, err
 }
 
-func (s *Service) sale(ctx context.Context, org uuid.UUID, saleIDs SaleIDs) (Sale, error) {
-	detail, err := s.Repo.Member(ctx, org, saleIDs.MemberID, s.today())
+func (s *Service) sale(ctx context.Context, gymID uuid.UUID, saleIDs SaleIDs) (Sale, error) {
+	detail, err := s.Repo.Member(ctx, gymID, saleIDs.MemberID, s.today())
 	if err != nil {
 		return Sale{}, err
 	}
@@ -288,17 +296,20 @@ func (s *Service) sale(ctx context.Context, org uuid.UUID, saleIDs SaleIDs) (Sal
 
 // Receipts lists a member's receipts.
 func (s *Service) Receipts(ctx context.Context, p auth.Principal, memberID uuid.UUID) ([]ReceiptSummary, error) {
-	if _, err := s.Repo.Member(ctx, p.OrganizationID, memberID, s.today()); err != nil {
+	if _, err := s.Repo.Member(ctx, p.GymID, memberID, s.today()); err != nil {
 		return nil, err
 	}
-	return s.Repo.MemberReceipts(ctx, p.OrganizationID, memberID)
+	return s.Repo.MemberReceipts(ctx, p.GymID, memberID)
 }
 
 // Receipt returns the printable data of a receipt.
 func (s *Service) Receipt(ctx context.Context, p auth.Principal, id uuid.UUID) (ReceiptDetail, error) {
-	receipt, err := s.Repo.Receipt(ctx, p.OrganizationID, id)
+	receipt, err := s.Repo.Receipt(ctx, p.GymID, id)
 	if err != nil {
 		return receipt, err
+	}
+	if s.Logos != nil {
+		receipt.Gym.LogoURL = s.Logos.LogoURL(ctx, p.TenantID)
 	}
 	return receipt, nil
 }

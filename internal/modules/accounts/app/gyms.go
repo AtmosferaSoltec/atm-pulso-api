@@ -37,7 +37,8 @@ type GymChanges struct {
 }
 
 type GymRepository interface {
-	UpdateGym(ctx context.Context, organizationID, gymID uuid.UUID, changes GymChanges) error
+	// UpdateGym changes the current gym (the service already checked it is the caller's).
+	UpdateGym(ctx context.Context, gymID uuid.UUID, changes GymChanges) error
 }
 
 var colorPattern = regexp.MustCompile(`^#[0-9a-f]{6}$`)
@@ -100,7 +101,7 @@ func (s *Service) UpdateGym(ctx context.Context, p auth.Principal, id uuid.UUID,
 		}
 		input.MembershipPrices.Value = &prices
 	}
-	if err := s.Gyms.UpdateGym(ctx, p.OrganizationID, id, input); err != nil {
+	if err := s.Gyms.UpdateGym(ctx, id, input); err != nil {
 		return Gym{}, err
 	}
 	catalog, err := s.Catalog(ctx, p)

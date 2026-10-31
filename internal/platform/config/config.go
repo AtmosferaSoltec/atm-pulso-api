@@ -23,9 +23,10 @@ const (
 )
 
 const (
-	defaultIdentityURL = "http://identity-api:8080"
-	defaultAuthURL     = "http://auth-api:8080"
-	defaultSystemCode  = "pulso"
+	defaultIdentityURL   = "http://identity-api:8080"
+	defaultStorageAPIURL = "http://storage-api:8084"
+	defaultAuthURL       = "http://auth-api:8080"
+	defaultSystemCode    = "pulso"
 )
 
 // Config is the validated environment.
@@ -38,6 +39,7 @@ type Config struct {
 	LoginRateLimitPerMinute int
 	Auth                    AuthConfig
 	Identity                IdentityConfig
+	StorageAPI              StorageAPIConfig
 	Storage                 StorageConfig
 }
 
@@ -63,6 +65,10 @@ type IdentityConfig struct {
 	URL    string
 	APIKey string
 }
+
+// StorageAPIConfig is how to reach atm-storage-api, which holds the company logos. Pulso reads them with
+// its service token (AUTH_CLIENT_SECRET); without that secret no logo is resolved.
+type StorageAPIConfig struct{ URL string }
 
 // StorageConfig is the Cloudflare R2 bucket that holds the payment vouchers. Without it
 // (development only) the voucher endpoints answer that storage is unavailable.
@@ -107,12 +113,17 @@ func LoadFrom(lookup func(string) string) (Config, error) {
 			URL:    r.optionalOr("IDENTITY_API_URL", defaultIdentityURL),
 			APIKey: r.optional("IDENTITY_API_KEY"),
 		},
+		StorageAPI: StorageAPIConfig{URL: r.httpURL("STORAGE_API_URL")},
 		Storage: StorageConfig{
 			Endpoint:        r.httpURL("R2_ENDPOINT"),
 			Bucket:          r.optional("R2_BUCKET"),
 			AccessKeyID:     r.optional("R2_ACCESS_KEY_ID"),
 			SecretAccessKey: r.optional("R2_SECRET_ACCESS_KEY"),
 		},
+	}
+
+	if cfg.StorageAPI.URL == "" {
+		cfg.StorageAPI.URL = defaultStorageAPIURL
 	}
 
 	if cfg.IsProduction() {

@@ -10,20 +10,22 @@ The backend of **Pulso**, Atmósfera's gym administration product. The web clien
 `atm-pulso-web` (React, a separate repo). This API is **independent**: it follows the way
 `atm-orbita-api` is built, but shares no code and no database with it or with any other project.
 
-Pulso serves many gyms at once (**multi-tenant**). Identity belongs to **atm-auth-api**: an auth *client*
-(the customer) is an *organization*, and each of its *companies* with Pulso enabled is a *gym*. Gyms have
-*branches*. Members, payments, access control and day passes always belong to one organization.
+Pulso serves many gyms at once (**multi-tenant**). Identity belongs to **atm-auth-api**: each *company* with Pulso
+enabled is a *gym* (a brand). A *group* is an internal label the platform superadmin uses to bundle related
+gyms (not a user, there is no owner). Gyms have *branches*. Members, payments, access control and day passes
+always belong to one **gym**; nothing is shared between gyms, not even of the same group (plan 07).
 
 Business rules that shape the code:
 
-- **There are no plans or limits in the API.** Gyms are companies created in console-web; branches are
+- **There are no plans or limits in the API.** Gyms are companies created in console-web; groups and branches are
   created, renamed and removed **only by the platform superadmin** from console-web (`/api/v1/admin`),
   because Atmósfera charges per branch. A gym's identity (name, RUC, colour, later the logo) is set from
   the console too. Gym admins never create gyms or branches. Anything commercial is handled outside the system.
-- The member directory is shared by every gym and branch of the same organization. Access between
-  branches is a per-gym rule set by that gym's admin.
+- The member directory is shared by the branches of a gym and never across gyms. Access between
+  branches is a per-gym rule set by that gym's admin. Groups, gyms' grouping and branches are created only by the superadmin.
 - Only two roles exist, `admin` and `receptionist` (the `app_role` of the token). An admin creates every
-  user of the current gym (admins and reception); there is no owner and no Pulso superadmin.
+  user of the current gym (admins and reception); there is no owner and no Pulso superadmin. A `member` role
+  (atm-auth-api users who see their own data) is planned but **not active**: unknown roles stay `NO_ACCESS`.
 
 ## 2. Language: everything in English
 
@@ -38,6 +40,7 @@ error codes: **English only**. The only Spanish allowed is what an end user read
 | nombres / apellidos | `first_names` / `paternal_surname`, `maternal_surname` |
 | razón social | `legal_name` |
 | boleta | `receipt` |
+| grupo (agrupa gimnasios) | `group` |
 | sede | `branch` |
 | administrador / recepción | `admin` / `receptionist` |
 
@@ -122,22 +125,22 @@ services never block the critical path of a request without a timeout.
 - The **platform superadmin's** token (`role: superadmin`, no system, no company) is accepted only on
   `/api/v1/admin/*`; a person's token is `403 FORBIDDEN` there, and the superadmin's token is
   `403 FORBIDDEN` everywhere else. The console is the only client of `/admin`.
-- On every request the `auth.Principal` (user, organization, gym, role, branches) is rebuilt from the
-  verified token and Pulso's own records, **never from a body, URL or query**: the organization by
-  `organizations.auth_client_id`, the gym by `gyms.auth_tenant_id` (both created on first sight, the gym with
-  a default branch), the user by `(gym, auth_user_id)` (created on first sight; the role follows the token).
+- On every request the `auth.Principal` (user, group, gym, role, branches) is rebuilt from the
+  verified token and Pulso's own records, **never from a body, URL or query**: the gym by
+  `gyms.auth_tenant_id` (created on first sight with a default branch, inside the group that already holds a gym of the same
+  auth client or a new one), the user by `(gym, auth_user_id)` (created on first sight; the role follows the token).
   `users.is_active = false` answers `403 USER_INACTIVE`. Deactivating or removing access in the console shows
   at the next token refresh.
 - Roles: `admin` reaches every branch of the **current gym** and manages its team and rules;
   `receptionist` reaches the branches in `user_branches`. Switching gym means asking atm-auth-api for a token
-  of another company. The member directory stays organization-wide.
+  of another company. The member directory is the gym's.
 - The team page calls atm-auth-api's **service members API** with Pulso's service token
   (`AUTH_CLIENT_SECRET`); Pulso decides who may do what (admins only), atm-auth-api executes. Nothing in
   Pulso hashes or stores a password.
 
 **Tenant isolation is non-negotiable.** Every query that touches business data filters by
-`organization_id`, taken from the Principal. Repositories take the organization as an explicit
-parameter. The database backs this up with composite foreign keys and `CHECK` constraints.
+`gym_id`, taken from the Principal. Repositories take the gym as an explicit
+parameter. The group is never a filter. The database backs this up with composite foreign keys and `CHECK` constraints.
 
 ## 7. Database rules
 

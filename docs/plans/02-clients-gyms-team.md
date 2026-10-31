@@ -1,5 +1,7 @@
 # API-02: clients, gyms, branches and team
 
+> **Superseded by [plan 07](07-groups-and-gym-scoped-members.md):** "organization", "owner", "client" and "network" scope in this plan are replaced by group (internal label), no owner, and gym-scoped members; the tenant key is now `gym_id`.
+
 **Depends on:** API-01 (done). **Unlocks:** WEB-02, API-03. **Rules:** business-rules §2, §3, §4, §5, §14, §15, §16.
 
 > **Superseded:** the free plan, `agreed_extra`, `PLAN_LIMIT_EXCEEDED`, the `plan` field and `plan_agreements` described below were removed (migration 00009). Gyms and branches have no limit; only the superadmin creates them.

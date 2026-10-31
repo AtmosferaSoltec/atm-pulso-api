@@ -23,9 +23,12 @@ type Tenant struct {
 	LegalName   string `json:"legal_name"`
 	TradeName   string `json:"trade_name"`
 	DisplayName string `json:"display_name"`
-	// ClientID and ClientName are the customer that owns the company: a Pulso organization.
+	// ClientID and ClientName are the customer that owns the company: a Pulso gym.
 	ClientID   string `json:"client_id"`
 	ClientName string `json:"client_name"`
+	// LogoFileID is the id of the company logo in atm-storage-api; nil while it has none. It is an id,
+	// never an address: ask atm-storage-api for a temporary link.
+	LogoFileID *string `json:"logo_file_id"`
 }
 
 // Name is the best name the company has.
@@ -115,6 +118,17 @@ func (c *HTTPClient) serviceToken(ctx context.Context) (string, error) {
 	}
 	c.token, c.expires = out.AccessToken, c.now().Add(time.Duration(out.ExpiresIn)*time.Second)
 	return c.token, nil
+}
+
+// ServiceToken is the system's service token (cached), for the other Atmosfera services that accept it,
+// such as atm-storage-api.
+func (c *HTTPClient) ServiceToken(ctx context.Context) (string, error) { return c.serviceToken(ctx) }
+
+// ForgetToken drops the cached service token, for a caller that was refused with it.
+func (c *HTTPClient) ForgetToken() {
+	c.mu.Lock()
+	c.token = ""
+	c.mu.Unlock()
 }
 
 func (c *HTTPClient) authorized(ctx context.Context, method, path string, body, out any) error {

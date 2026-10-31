@@ -39,21 +39,21 @@ type Voucher struct {
 // NewVoucher is a voucher about to be stored.
 type NewVoucher struct {
 	Voucher
-	OrganizationID uuid.UUID
-	PaymentID      uuid.UUID
-	UploadedBy     uuid.UUID
+	GymID      uuid.UUID
+	PaymentID  uuid.UUID
+	UploadedBy uuid.UUID
 }
 
 // Repository stores the voucher rows.
 type Repository interface {
-	// PaymentOfReceipt returns domain.ErrReceiptNotFound when the organization has no such receipt.
-	PaymentOfReceipt(ctx context.Context, organizationID, receiptID uuid.UUID) (PaymentInfo, error)
+	// PaymentOfReceipt returns domain.ErrReceiptNotFound when the gym has no such receipt.
+	PaymentOfReceipt(ctx context.Context, gymID, receiptID uuid.UUID) (PaymentInfo, error)
 	// Add stores the row unless the payment already has max vouchers (domain.ErrLimitReached).
 	// Concurrent uploads of one payment are serialized, so the limit cannot be beaten.
 	Add(ctx context.Context, v NewVoucher, max int) error
-	List(ctx context.Context, organizationID, paymentID uuid.UUID) ([]Voucher, error)
-	// Find returns domain.ErrVoucherNotFound when the organization has no such voucher.
-	Find(ctx context.Context, organizationID, voucherID uuid.UUID) (Voucher, PaymentInfo, error)
+	List(ctx context.Context, gymID, paymentID uuid.UUID) ([]Voucher, error)
+	// Find returns domain.ErrVoucherNotFound when the gym has no such voucher.
+	Find(ctx context.Context, gymID, voucherID uuid.UUID) (Voucher, PaymentInfo, error)
 }
 
 // File is a stored voucher being read; the caller closes Body.
@@ -83,7 +83,7 @@ func reach(p auth.Principal, info PaymentInfo) bool {
 
 // Upload stores a voucher for the payment of a receipt. Cash needs none.
 func (s *Service) Upload(ctx context.Context, p auth.Principal, receiptID uuid.UUID, data []byte) (Voucher, error) {
-	info, err := s.Repo.PaymentOfReceipt(ctx, p.OrganizationID, receiptID)
+	info, err := s.Repo.PaymentOfReceipt(ctx, p.GymID, receiptID)
 	if err != nil {
 		return Voucher{}, err
 	}
@@ -106,13 +106,13 @@ func (s *Service) Upload(ctx context.Context, p auth.Principal, receiptID uuid.U
 	}
 
 	id := ids.New()
-	key := fmt.Sprintf("vouchers/%s/%s/%s.%s", p.OrganizationID, info.ID, id, extension)
+	key := fmt.Sprintf("vouchers/%s/%s/%s.%s", p.GymID, info.ID, id, extension)
 	if err := s.Store.Put(ctx, key, contentType, data); err != nil {
 		return Voucher{}, fmt.Errorf("store voucher: %w", err)
 	}
 	row := NewVoucher{
-		Voucher:        Voucher{ID: id, ContentType: contentType, SizeBytes: len(data), CreatedAt: time.Now().UTC(), StorageKey: key},
-		OrganizationID: p.OrganizationID, PaymentID: info.ID, UploadedBy: p.UserID,
+		Voucher: Voucher{ID: id, ContentType: contentType, SizeBytes: len(data), CreatedAt: time.Now().UTC(), StorageKey: key},
+		GymID:   p.GymID, PaymentID: info.ID, UploadedBy: p.UserID,
 	}
 	if err := s.Repo.Add(ctx, row, domain.MaxPerPayment); err != nil {
 		s.discard(key)
@@ -123,19 +123,19 @@ func (s *Service) Upload(ctx context.Context, p auth.Principal, receiptID uuid.U
 
 // List returns the vouchers of the payment of a receipt, oldest first.
 func (s *Service) List(ctx context.Context, p auth.Principal, receiptID uuid.UUID) ([]Voucher, error) {
-	info, err := s.Repo.PaymentOfReceipt(ctx, p.OrganizationID, receiptID)
+	info, err := s.Repo.PaymentOfReceipt(ctx, p.GymID, receiptID)
 	if err != nil {
 		return nil, err
 	}
 	if !reach(p, info) {
 		return nil, domain.ErrReceiptNotFound
 	}
-	return s.Repo.List(ctx, p.OrganizationID, info.ID)
+	return s.Repo.List(ctx, p.GymID, info.ID)
 }
 
 // Open returns the file of a voucher.
 func (s *Service) Open(ctx context.Context, p auth.Principal, voucherID uuid.UUID) (Voucher, File, error) {
-	v, info, err := s.Repo.Find(ctx, p.OrganizationID, voucherID)
+	v, info, err := s.Repo.Find(ctx, p.GymID, voucherID)
 	if err != nil {
 		return Voucher{}, File{}, err
 	}

@@ -22,6 +22,7 @@ The API has 39 operations over 33 paths; `docs/openapi.yaml` is the contract the
 | 00004 | `accounts_tenant_constraints` | `organization_id` on branches and user_branches, composite FKs, `plan_agreements` |
 | 00005 | `members_create_members_and_payments` | members, memberships, membership_branches, receipts, receipt_counters, payments |
 | 00006 | `access_create_entries_and_day_passes` | day_passes, access_entries, FK from payments |
+| 00013 | `accounts_groups_and_gym_scope` | plan 07: `organizations` -> `groups`, tenant key `organization_id` -> `gym_id` on every business table (backfilled from branches), receipt series per gym, `network` scope removed, `members.auth_user_id` (nullable). Deploying needs the web and console-web updated at the same time (`/admin/clients` is now `/admin/groups`, `organization` leaves `/me` and `/catalog`) |
 
 Verified on an empty database (up, down all six, up again) and from the production state (version 2 with one
 superadmin inserted by hand: it survives and ends at version 6). The `down` of each migration works.
@@ -69,7 +70,7 @@ business-rules.md won over the plans:
 
 ## Known limits and open points
 
-- Gym logos are deferred (Cloudflare R2 later). The web keeps the monogram and the colour.
+- Gym logos come from the company profile (atm-auth-api `logo_file_id`) through temporary links of atm-storage-api (`STORAGE_API_URL`, default `http://storage-api:8084`); the service token of Pulso must be accepted by storage-api (same auth-api key). If storage is down `logo_url` is null and the web shows the monogram.
 - Access entries are kept forever (no retention policy decided).
 - Rate limits are per IP and in memory (one replica); the CSV download shares the login's stricter limit.
 - Memory: 256 MB container; password hashing runs at most 4 at a time.

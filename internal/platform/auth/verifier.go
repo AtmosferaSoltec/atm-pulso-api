@@ -25,7 +25,7 @@ type Claims struct {
 	Role   string `json:"role"`
 	System string `json:"system"`
 	Tenant string `json:"tenant"`
-	// Client is the customer (owner of one or more companies); ClientName its name.
+	// Client is the auth customer of the company; ClientName its name. Only a hint to place a new gym in a group.
 	Client      string `json:"client"`
 	ClientName  string `json:"client_name"`
 	AppRole     string `json:"app_role"`

@@ -38,11 +38,11 @@ type person struct {
 	TenantID   uuid.UUID
 }
 
-// tenant is one client (auth client) with two gyms (auth companies), three branches and a few people.
+// tenant is one group with two gyms (auth companies of one client), three branches and a few people.
 type tenant struct {
-	OrganizationID         uuid.UUID
+	GroupID                uuid.UUID
 	ClientID               uuid.UUID
-	OrganizationName       string
+	GroupName              string
 	GymOne, GymTwo         uuid.UUID
 	TenantOne, TenantTwo   uuid.UUID
 	GymOneName, GymTwoName string
@@ -60,10 +60,10 @@ func (h harness) newTenant(t *testing.T) tenant {
 	t.Helper()
 	ctx := context.Background()
 	tn := tenant{
-		OrganizationID:   ids.New(),
-		ClientID:         uuid.New(),
-		OrganizationName: "Cliente " + uniqueDocument(),
-		GymOne:           ids.New(), GymTwo: ids.New(),
+		GroupID:   ids.New(),
+		ClientID:  uuid.New(),
+		GroupName: "Grupo " + uniqueDocument(),
+		GymOne:    ids.New(), GymTwo: ids.New(),
 		TenantOne: uuid.New(), TenantTwo: uuid.New(),
 		GymOneName: "Gym Uno", GymTwoName: "Gym Dos",
 		BranchA: ids.New(), BranchB: ids.New(), BranchC: ids.New(),
@@ -77,23 +77,25 @@ func (h harness) newTenant(t *testing.T) tenant {
 		_, err := h.pool.Exec(ctx, sql, args...)
 		require.NoError(t, err)
 	}
-	exec(`INSERT INTO organizations (id, name, auth_client_id) VALUES ($1, $2, $3)`, tn.OrganizationID, tn.OrganizationName, tn.ClientID)
+	exec(`INSERT INTO groups (id, name) VALUES ($1, $2)`, tn.GroupID, tn.GroupName)
 	t.Cleanup(func() {
-		_, _ = h.pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, tn.OrganizationID)
+		// Gyms first (a group with gyms cannot be removed); everything else cascades from the gym.
+		_, _ = h.pool.Exec(context.Background(), `DELETE FROM gyms WHERE group_id = $1`, tn.GroupID)
+		_, _ = h.pool.Exec(context.Background(), `DELETE FROM groups WHERE id = $1`, tn.GroupID)
 	})
 
-	exec(`INSERT INTO gyms (id, organization_id, name, auth_tenant_id) VALUES ($1, $3, $4, $6), ($2, $3, $5, $7)`,
-		tn.GymOne, tn.GymTwo, tn.OrganizationID, tn.GymOneName, tn.GymTwoName, tn.TenantOne, tn.TenantTwo)
-	exec(`INSERT INTO branches (id, gym_id, name, organization_id) VALUES ($1, $4, 'Sede A', $6), ($2, $4, 'Sede B', $6), ($3, $5, 'Sede C', $6)`,
-		tn.BranchA, tn.BranchB, tn.BranchC, tn.GymOne, tn.GymTwo, tn.OrganizationID)
+	exec(`INSERT INTO gyms (id, group_id, name, auth_tenant_id, auth_client_id) VALUES ($1, $3, $4, $6, $8), ($2, $3, $5, $7, $8)`,
+		tn.GymOne, tn.GymTwo, tn.GroupID, tn.GymOneName, tn.GymTwoName, tn.TenantOne, tn.TenantTwo, tn.ClientID)
+	exec(`INSERT INTO branches (id, gym_id, name) VALUES ($1, $4, 'Sede A'), ($2, $4, 'Sede B'), ($3, $5, 'Sede C')`,
+		tn.BranchA, tn.BranchB, tn.BranchC, tn.GymOne, tn.GymTwo)
 	user := func(id, authID uuid.UUID, gym uuid.UUID, document, name, role string) {
-		exec(`INSERT INTO users (id, organization_id, gym_id, auth_user_id, document_number, full_name, role) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-			id, tn.OrganizationID, gym, authID, document, name, role)
+		exec(`INSERT INTO users (id, gym_id, auth_user_id, document_number, full_name, role) VALUES ($1, $2, $3, $4, $5, $6)`,
+			id, gym, authID, document, name, role)
 	}
 	user(tn.AdminID, tn.AdminAuth, tn.GymOne, tn.Admin, "Admin de Prueba", "admin")
 	user(tn.AdminTwoID, tn.AdminTwoAuth, tn.GymTwo, tn.AdminTwo, "Admin Dos de Prueba", "admin")
 	user(tn.ReceptionistID, tn.ReceptionistAuth, tn.GymOne, tn.Receptionist, "Recepción de Prueba", "receptionist")
-	exec(`INSERT INTO user_branches (user_id, branch_id, organization_id) VALUES ($1, $2, $4), ($1, $3, $4)`, tn.ReceptionistID, tn.BranchA, tn.BranchB, tn.OrganizationID)
+	exec(`INSERT INTO user_branches (user_id, branch_id, gym_id) VALUES ($1, $2, $4), ($1, $3, $4)`, tn.ReceptionistID, tn.BranchA, tn.BranchB, tn.GymOne)
 
 	for _, m := range []struct {
 		tenant         uuid.UUID
@@ -107,10 +109,43 @@ func (h harness) newTenant(t *testing.T) tenant {
 	} {
 		h.auth.SetMember(m.tenant.String(), authapi.Member{UserID: m.auth.String(), DNI: m.document, FullName: m.name, Role: m.role, Status: "active"})
 	}
-	h.people.Store(tn.Admin, person{AuthUserID: tn.AdminAuth, Document: tn.Admin, Name: "Admin de Prueba", Role: "admin", ClientID: tn.ClientID, ClientName: tn.OrganizationName, TenantID: tn.TenantOne})
-	h.people.Store(tn.AdminTwo, person{AuthUserID: tn.AdminTwoAuth, Document: tn.AdminTwo, Name: "Admin Dos de Prueba", Role: "admin", ClientID: tn.ClientID, ClientName: tn.OrganizationName, TenantID: tn.TenantTwo})
-	h.people.Store(tn.Receptionist, person{AuthUserID: tn.ReceptionistAuth, Document: tn.Receptionist, Name: "Recepción de Prueba", Role: "receptionist", ClientID: tn.ClientID, ClientName: tn.OrganizationName, TenantID: tn.TenantOne})
+	h.people.Store(tn.Admin, person{AuthUserID: tn.AdminAuth, Document: tn.Admin, Name: "Admin de Prueba", Role: "admin", ClientID: tn.ClientID, ClientName: tn.GroupName, TenantID: tn.TenantOne})
+	h.people.Store(tn.AdminTwo, person{AuthUserID: tn.AdminTwoAuth, Document: tn.AdminTwo, Name: "Admin Dos de Prueba", Role: "admin", ClientID: tn.ClientID, ClientName: tn.GroupName, TenantID: tn.TenantTwo})
+	h.people.Store(tn.Receptionist, person{AuthUserID: tn.ReceptionistAuth, Document: tn.Receptionist, Name: "Recepción de Prueba", Role: "receptionist", ClientID: tn.ClientID, ClientName: tn.GroupName, TenantID: tn.TenantOne})
 	return tn
+}
+
+// extraBranch adds a third branch to GymOne that the receptionist is not assigned to.
+func (h harness) extraBranch(t *testing.T, tn tenant) uuid.UUID {
+	t.Helper()
+	id := ids.New()
+	_, err := h.pool.Exec(context.Background(), `INSERT INTO branches (id, gym_id, name) VALUES ($1, $2, 'Sede D')`, id, tn.GymOne)
+	require.NoError(t, err)
+	return id
+}
+
+// cleanupClient removes, when the test ends, the gyms the API recorded for an auth client and the
+// groups it created for them.
+func (h harness) cleanupClient(t *testing.T, client uuid.UUID) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx := context.Background()
+		var groups []uuid.UUID
+		rows, err := h.pool.Query(ctx, `SELECT DISTINCT group_id FROM gyms WHERE auth_client_id = $1`, client)
+		if err == nil {
+			for rows.Next() {
+				var id uuid.UUID
+				if rows.Scan(&id) == nil {
+					groups = append(groups, id)
+				}
+			}
+			rows.Close()
+		}
+		_, _ = h.pool.Exec(ctx, `DELETE FROM gyms WHERE auth_client_id = $1`, client)
+		for _, id := range groups {
+			_, _ = h.pool.Exec(ctx, `DELETE FROM groups WHERE id = $1`, id)
+		}
+	})
 }
 
 // freshAdmin inserts an active admin of its own, to change it without disturbing others.

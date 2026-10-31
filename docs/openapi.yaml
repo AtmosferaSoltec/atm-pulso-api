@@ -15,8 +15,11 @@ info:
     - Two kinds of token. A **person's** token (role `user`, system `pulso`, one company and its client)
       opens everything except `/admin/*`; its `app_role` must be `admin` or `receptionist`. The
       **platform administrator's** token (atm-auth-api's superadmin, no system, no company) opens only `/admin/*`.
-    - Model: an auth *client* is an organization, an auth *company* with Pulso enabled is a gym (the token's
-      company is the current gym), and branches are created only by the superadmin from the console.
+    - Model: a **group** is an internal label the superadmin uses to bundle related gyms (not a user; there is no
+      owner); an auth *company* with Pulso enabled is a **gym** (a brand; the token's company is the current gym);
+      a gym has **branches**. Members, payments, receipts and access belong to one gym: nothing is shared between
+      gyms, not even of the same group. Groups, gym grouping and branches are managed only by the superadmin
+      from the console.
     - Errors of the guard: `UNAUTHORIZED` (401, missing/invalid/expired token), `NO_ACCESS` (403, the token
       does not open Pulso: other system, unknown role, no company), `USER_INACTIVE` (403, blocked in Pulso),
       `FORBIDDEN` (403, wrong kind of token or role).
@@ -101,14 +104,14 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
-  /admin/clients:
+  /admin/groups:
     get:
       tags: [admin]
-      summary: Every client with its gyms and branches (superadmin).
+      summary: Every group with its gyms and branches (superadmin).
       description: |
-        First records every company that has Pulso enabled in atm-auth-api (its client as an organization,
-        itself as a gym with a default branch "Sede principal"); if atm-auth-api does not answer, the stored
-        clients are listed.
+        First records every company that has Pulso enabled in atm-auth-api (itself as a gym with a default
+        branch "Sede principal", inside the group that already holds a gym of the same auth client, or a new
+        group named after that client); if atm-auth-api does not answer, the stored groups are listed.
       security: [{ bearer: [] }]
       responses:
         "200":
@@ -120,13 +123,79 @@ paths:
                 properties:
                   data:
                     type: array
-                    items: { $ref: "#/components/schemas/AdminClient" }
+                    items: { $ref: "#/components/schemas/AdminGroup" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [admin]
+      summary: Create a group (superadmin).
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 80 }
+      responses:
+        "201":
+          description: The group (no gyms yet).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/AdminGroup" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/groups/{id}:
+    patch:
+      tags: [admin]
+      summary: Rename a group (superadmin).
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 80 }
+      responses:
+        "200":
+          description: The group.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/AdminGroup" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [admin]
+      summary: Remove an empty group (superadmin). A group that still has gyms answers 409 GROUP_IN_USE.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removed. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /admin/gyms/{gym_id}:
     patch:
       tags: [admin]
-      summary: Set the look of a gym (superadmin).
+      summary: Set the look of a gym and/or move it to another group (superadmin).
       security: [{ bearer: [] }]
       parameters:
         - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -136,9 +205,10 @@ paths:
           application/json:
             schema:
               type: object
-              required: [brand_color]
+              description: Send at least one field.
               properties:
                 brand_color: { type: string, pattern: '^#[0-9a-f]{6}$' }
+                group_id: { type: string, format: uuid, description: Moves the gym to that group; an unknown group answers 400 SCOPE_NOT_ALLOWED. }
       responses:
         "200":
           description: The gym.
@@ -229,13 +299,13 @@ paths:
   /catalog:
     get:
       tags: [accounts]
-      summary: Read the shared organization directory and accessible branches.
-      description: Other roles ignore the inspection header and use their live organization.
+      summary: Read the current gym with its branches and which ones the person may operate.
+      description: Only the gym of the token; other gyms (even of the same group) are never listed.
       security: [{ bearer: [] }]
       parameters:
       responses:
         "200":
-          description: Organization directory.
+          description: The current gym.
           content:
             application/json:
               schema:
@@ -247,7 +317,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404":
-          description: Organization does not exist.
+          description: The gym does not exist.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -285,7 +355,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "404":
-          description: NOT_FOUND (also for resources of another organization).
+          description: NOT_FOUND (also for resources of another gym).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -297,7 +367,7 @@ paths:
         must be changed at the first login). Admin only. An admin takes no branches; a receptionist needs
         one or more branches of the current gym. Errors: `AUTH_UNAVAILABLE` (503), `USER_IN_OTHER_COMPANY` (409,
         the person already works for another company: only Atmósfera can add them to a second one),
-        `ROLE_NOT_ASSIGNABLE`, `SCOPE_NOT_ALLOWED` (a branch of another gym or client).
+        `ROLE_NOT_ASSIGNABLE`, `SCOPE_NOT_ALLOWED` (a branch of another gym).
       security: [{ bearer: [] }]
       requestBody:
         required: true
@@ -322,7 +392,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "404":
-          description: NOT_FOUND (also for resources of another organization).
+          description: NOT_FOUND (also for resources of another gym).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -362,7 +432,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "404":
-          description: NOT_FOUND (also for resources of another organization).
+          description: NOT_FOUND (also for resources of another gym).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -397,7 +467,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "404":
-          description: NOT_FOUND (also for resources of another organization).
+          description: NOT_FOUND (also for resources of another gym).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -427,7 +497,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "404":
-          description: NOT_FOUND (also for resources of another organization).
+          description: NOT_FOUND (also for resources of another gym).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -457,7 +527,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "404":
-          description: NOT_FOUND (also for resources of another organization).
+          description: NOT_FOUND (also for resources of another gym).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -497,7 +567,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "404":
-          description: NOT_FOUND (also for resources of another organization).
+          description: NOT_FOUND (also for resources of another gym).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -505,7 +575,7 @@ paths:
     get:
       tags: [members]
       summary: List the shared member directory with status counts.
-      description: Every role of the organization sees every member. Counts ignore the status filter but respect q and home_branch_id.
+      description: Every role of the gym sees every member of the gym (all its branches). Counts ignore the status filter but respect q and home_branch_id.
       security: [{ bearer: [] }]
       parameters:
         - { name: q, in: query, schema: { type: string }, description: Name or document (contains). }
@@ -713,7 +783,7 @@ paths:
     get:
       tags: [members]
       summary: Printable data of a receipt (membership or day pass).
-      description: Any past receipt can be reprinted. A receipt of another organization answers 404.
+      description: Any past receipt can be reprinted. A receipt of another gym answers 404.
       security: [{ bearer: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -939,7 +1009,7 @@ paths:
     get:
       tags: [reports]
       summary: Figures of a gym or branch for today and this month.
-      description: Admin only (reception gets 403). A new organization answers zeros, never sample data. `expiring_soon` has at most five members, nearest end date first.
+      description: Admin only (reception gets 403). A new gym answers zeros, never sample data. `expiring_soon` has at most five members, nearest end date first.
       security: [{ bearer: [] }]
       parameters:
         - { name: branch_id, in: query, schema: { type: string, format: uuid } }
@@ -1019,11 +1089,11 @@ components:
         accessible: { type: boolean }
     Catalog:
       type: object
-      required: [organization, gyms]
+      required: [gyms]
       properties:
-        organization: { $ref: "#/components/schemas/Named" }
         gyms:
           type: array
+          description: Exactly one entry, the current gym.
           items: { $ref: "#/components/schemas/Gym" }
     Gym:
       type: object
@@ -1034,7 +1104,7 @@ components:
         display_name: { type: [string, "null"] }
         tax_id: { type: [string, "null"], description: RUC; null when the company has none. }
         brand_color: { type: string, pattern: '^#[0-9a-f]{6}$' }
-        logo_url: { type: [string, "null"], description: Always null for now; the logo will come from the company profile of atm-auth-api. }
+        logo_url: { type: [string, "null"], description: "Temporary signed https link (atm-storage-api) to the logo of the gym's company profile; null when the gym has no logo or the link cannot be obtained right now. It expires (about an hour): never store it, ask again; fall back to the monogram when it fails to load." }
         day_pass_price: { type: string, example: "15.00" }
         day_pass_price_is_default: { type: boolean }
         branch_sharing: { type: boolean }
@@ -1171,7 +1241,7 @@ components:
         starts_on: { type: string, format: date }
         ends_on: { type: string, format: date }
         amount: { type: string, example: "270.00" }
-        access_scope: { type: string, enum: [branch, gym, network] }
+        access_scope: { type: string, enum: [branch, gym] }
         access_branches: { type: array, items: { $ref: "#/components/schemas/AccessBranch" } }
         receipt: { oneOf: [{ $ref: "#/components/schemas/ReceiptRef" }, { type: "null" }] }
     MemberDetail:
@@ -1202,7 +1272,7 @@ components:
         starts_on: { type: string, format: date, description: Defaults to today (Lima). }
         amount: { type: string, example: "270.00", description: Total charged, 0 to 1,000,000.00. }
         method: { type: string, enum: [yape_plin, cash, card, transfer] }
-        access_scope: { type: string, enum: [branch, gym, network], default: branch }
+        access_scope: { type: string, enum: [branch, gym], default: branch }
         access_branch_ids:
           type: array
           description: Defaults to every branch of the scope; must contain the home branch and be a subset of the scope.
@@ -1217,7 +1287,7 @@ components:
         starts_on: { type: string, format: date }
         amount: { type: string }
         method: { type: string, enum: [yape_plin, cash, card, transfer] }
-        access_scope: { type: string, enum: [branch, gym, network], default: branch }
+        access_scope: { type: string, enum: [branch, gym], default: branch }
         access_branch_ids: { type: array, items: { type: string, format: uuid } }
     ReceiptSummary:
       type: object
@@ -1244,7 +1314,7 @@ components:
             name: { type: string, description: The display name when the gym has one. }
             tax_id: { type: [string, "null"] }
             brand_color: { type: string }
-            logo_url: { type: [string, "null"], description: Address of the logo relative to the API prefix; null when the gym has none. }
+            logo_url: { type: [string, "null"], description: Temporary signed https link to the gym's logo (same as `Gym.logo_url`); null when none or unavailable. }
         branch:
           type: object
           required: [name, address]
@@ -1415,16 +1485,13 @@ components:
               phone: { type: string }
     User:
       type: object
-      required: [id, document_number, full_name, phone, role, organization, gym, branches]
+      required: [id, document_number, full_name, phone, role, gym, branches]
       properties:
         id: { type: string, format: uuid }
         document_number: { type: string, example: "10000002" }
         full_name: { type: string }
         phone: { type: [string, "null"] }
         role: { type: string, enum: [admin, receptionist] }
-        organization:
-          description: The client (owner of one or more gyms).
-          $ref: "#/components/schemas/Named"
         gym:
           description: The company of the token, the gym the person is working in.
           type: object
@@ -1433,7 +1500,7 @@ components:
             id: { type: string, format: uuid }
             name: { type: string }
             brand_color: { type: string, pattern: '^#[0-9a-f]{6}$' }
-            logo_url: { type: [string, "null"] }
+            logo_url: { type: [string, "null"], description: Temporary signed https link to the gym's logo (same as `Gym.logo_url`); null when none or unavailable. }
         branches:
           type: array
           description: All the branches of the gym for an admin, the assigned ones for a receptionist.
@@ -1453,22 +1520,24 @@ components:
         address: { type: [string, "null"] }
     AdminGym:
       type: object
-      required: [id, auth_tenant_id, ruc, name, brand_color, branches]
+      required: [id, group_id, auth_tenant_id, auth_client_id, ruc, name, brand_color, branches]
       properties:
         id: { type: string, format: uuid }
+        group_id: { type: string, format: uuid }
         auth_tenant_id: { type: string, format: uuid }
+        auth_client_id: { type: string, format: uuid }
         ruc: { type: [string, "null"], description: Null when the company has none. }
         name: { type: string }
         brand_color: { type: string, pattern: '^#[0-9a-f]{6}$' }
         branches:
           type: array
           items: { $ref: "#/components/schemas/AdminBranch" }
-    AdminClient:
+    AdminGroup:
       type: object
-      required: [id, auth_client_id, name, gyms]
+      description: An internal label that bundles related gyms. Not a user.
+      required: [id, name, gyms]
       properties:
         id: { type: string, format: uuid }
-        auth_client_id: { type: string, format: uuid }
         name: { type: string }
         gyms:
           type: array

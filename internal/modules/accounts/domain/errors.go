@@ -18,6 +18,8 @@ var (
 	ErrUserInOtherCompany = errors.New("user belongs to another company")
 	// ErrAuthUnavailable: atm-auth-api is not configured or did not answer.
 	ErrAuthUnavailable = errors.New("atm-auth-api unavailable")
+	// ErrGroupInUse: the group still has gyms and cannot be removed.
+	ErrGroupInUse = errors.New("group in use")
 	// ErrBranchInUse: the branch has history or people and cannot be removed.
 	ErrBranchInUse = errors.New("branch in use")
 )
