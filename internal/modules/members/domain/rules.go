@@ -60,36 +60,75 @@ func EndDate(start time.Time, months int) time.Time {
 	return time.Date(lastOfTarget.Year(), lastOfTarget.Month(), day, 0, 0, 0, 0, time.UTC)
 }
 
-// StatusOf derives the status and the days remaining until the latest end date.
+// Overlaps says whether two periods of the same plan collide. Periods are half-open, [starts_on, ends_on):
+// the end date is the day the next period of the plan may begin, so a renewal that starts on the end date
+// of the previous period does NOT overlap it, while starting one day earlier does.
+func Overlaps(a, b Period) bool {
+	return a.StartsOn.Before(b.EndsOn) && b.StartsOn.Before(a.EndsOn)
+}
+
+// Ended says whether a period is over: its last day (ends_on, inclusive for coverage) is before today.
+func Ended(p Period, today time.Time) bool { return p.EndsOn.Before(today) }
+
+// CoverageEnd is where a member's coverage stops, or nil when no period is current on today. Periods
+// may belong to different plans and overlap. Start from the latest end among the periods that are
+// current (starts_on <= today <= ends_on, both inclusive) and keep extending it with any period that
+// begins on or before the day after it, so a renewal queued behind the current period (or another plan
+// that continues it) counts. The same rule is written in SQL in platform/memberstatus.
+func CoverageEnd(periods []Period, today time.Time) *time.Time {
+	var end *time.Time
+	for _, p := range periods {
+		if !p.StartsOn.After(today) && !p.EndsOn.Before(today) && (end == nil || p.EndsOn.After(*end)) {
+			e := p.EndsOn
+			end = &e
+		}
+	}
+	if end == nil {
+		return nil
+	}
+	for extended := true; extended; {
+		extended = false
+		for _, p := range periods {
+			if !p.StartsOn.After(end.AddDate(0, 0, 1)) && p.EndsOn.After(*end) {
+				e := p.EndsOn
+				end, extended = &e, true
+			}
+		}
+	}
+	return end
+}
+
+// StatusOf derives the status of a member from all their periods, whatever their plan, and the days
+// remaining. Covered (some period current today): "expiring" when the coverage end (see CoverageEnd) is
+// ExpiringDays or fewer away, else "active"; days = coverage end - today. Not covered: "scheduled" when a
+// period starts later, else "expired"; days = latest end of any period - today (negative when past).
 // With no periods the member is expired with zero days.
 func StatusOf(periods []Period, today time.Time) (Status, int) {
 	if len(periods) == 0 {
 		return StatusExpired, 0
 	}
+	if end := CoverageEnd(periods, today); end != nil {
+		days := int(end.Sub(today).Hours() / 24)
+		if days <= ExpiringDays {
+			return StatusExpiring, days
+		}
+		return StatusActive, days
+	}
 	latest := periods[0].EndsOn
-	active, scheduled := false, false
+	scheduled := false
 	for _, p := range periods {
 		if p.EndsOn.After(latest) {
 			latest = p.EndsOn
-		}
-		if !p.StartsOn.After(today) && !p.EndsOn.Before(today) {
-			active = true
 		}
 		if p.StartsOn.After(today) {
 			scheduled = true
 		}
 	}
 	days := int(latest.Sub(today).Hours() / 24)
-	switch {
-	case active && days <= ExpiringDays:
-		return StatusExpiring, days
-	case active:
-		return StatusActive, days
-	case scheduled:
+	if scheduled {
 		return StatusScheduled, days
-	default:
-		return StatusExpired, days
 	}
+	return StatusExpired, days
 }
 
 // PlanLabel is "1 mes" or "N meses".

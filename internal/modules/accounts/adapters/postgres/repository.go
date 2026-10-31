@@ -49,8 +49,8 @@ func translateWrite(err error) error {
 // FindTenancy finds the gym of a company and its group, checking the company belongs to the client of the token.
 func (r *Repository) FindTenancy(ctx context.Context, clientID, tenantID uuid.UUID) (app.Tenancy, error) {
 	var tenancy app.Tenancy
-	err := r.pool.QueryRow(ctx, `SELECT group_id, id FROM gyms WHERE auth_tenant_id = $1 AND auth_client_id = $2`,
-		tenantID, clientID).Scan(&tenancy.GroupID, &tenancy.GymID)
+	err := r.pool.QueryRow(ctx, `SELECT group_id, id, features FROM gyms WHERE auth_tenant_id = $1 AND auth_client_id = $2`,
+		tenantID, clientID).Scan(&tenancy.GroupID, &tenancy.GymID, &tenancy.Features)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.Tenancy{}, domain.ErrResourceNotFound
 	}
@@ -82,7 +82,7 @@ func (r *Repository) EnsureTenancy(ctx context.Context, in app.TenancyInput) (ap
 			return err
 		}
 		var client uuid.UUID
-		if err := t.QueryRow(ctx, `SELECT id, group_id, auth_client_id FROM gyms WHERE auth_tenant_id = $1`, in.TenantID).Scan(&tenancy.GymID, &tenancy.GroupID, &client); err != nil {
+		if err := t.QueryRow(ctx, `SELECT id, group_id, auth_client_id, features FROM gyms WHERE auth_tenant_id = $1`, in.TenantID).Scan(&tenancy.GymID, &tenancy.GroupID, &client, &tenancy.Features); err != nil {
 			return err
 		}
 		if client != in.ClientID {
@@ -190,8 +190,8 @@ func (r *Repository) BranchIDs(ctx context.Context, userID uuid.UUID) ([]uuid.UU
 // of the principal, so a bad row can never leak another gym's names.
 func (r *Repository) ScopeOf(ctx context.Context, p auth.Principal) (app.Scope, error) {
 	scope := app.Scope{Branches: []app.BranchRef{}}
-	if err := r.pool.QueryRow(ctx, `SELECT id, COALESCE(display_name, name), brand_color FROM gyms WHERE id = $1`, p.GymID).
-		Scan(&scope.Gym.ID, &scope.Gym.Name, &scope.Gym.BrandColor); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT id, COALESCE(display_name, name), brand_color, features FROM gyms WHERE id = $1`, p.GymID).
+		Scan(&scope.Gym.ID, &scope.Gym.Name, &scope.Gym.BrandColor, &scope.Gym.Features); err != nil {
 		return app.Scope{}, fmt.Errorf("query gym: %w", err)
 	}
 	query := `SELECT b.id, b.name, g.id, COALESCE(g.display_name, g.name)

@@ -12,6 +12,7 @@ owns deployment will deploy only when both repositories are finished.
 | 05 reports | Payments report and export, dashboard | WEB-05 |
 | 06 hardening-and-release | Contract test, security review, indexes, hand-over | WEB-06 |
 | 07 groups-and-gym-scoped-members | Groups replace organizations/owners; members and series belong to a gym | WEB follow-up |
+| 08 modules-plans-kiosk-products-body | Per-gym modules and membership plans (done); kiosk, products, body tracking (pending) | in the same plan |
 
 Web plans live in `../../../atm-pulso-web/docs/plans/`. Work in order; the web slice N can start as soon as API plan N is accepted.
 

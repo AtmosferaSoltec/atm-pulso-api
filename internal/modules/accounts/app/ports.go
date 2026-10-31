@@ -16,6 +16,8 @@ import (
 type Tenancy struct {
 	GroupID uuid.UUID
 	GymID   uuid.UUID
+	// Features are the names of the optional modules the gym has switched on.
+	Features []string
 }
 
 // TenancyInput is what a token (or the company list of atm-auth-api) says about the
@@ -72,6 +74,8 @@ type GymSummary struct {
 	ID         uuid.UUID
 	Name       string
 	BrandColor string
+	// Features are the optional modules the gym has switched on, in the order of auth.AllFeatures.
+	Features []string
 }
 
 // BranchRef is a branch with the gym it belongs to.

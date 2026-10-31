@@ -46,6 +46,15 @@ func TestStatusOf(t *testing.T) {
 		{"future only", []Period{{day(2026, 10, 28), day(2027, 1, 28)}}, StatusScheduled, 93},
 		{"expired and scheduled", []Period{{day(2026, 1, 1), day(2026, 2, 1)}, {day(2026, 11, 1), day(2026, 12, 1)}}, StatusScheduled, 35},
 		{"active plus next", []Period{{day(2026, 10, 1), day(2026, 10, 30)}, {day(2026, 10, 31), day(2027, 1, 31)}}, StatusActive, 96},
+		// Several plans at once (plan 08).
+		{"two plans, the short one expires first", []Period{{day(2026, 10, 1), day(2026, 10, 30)}, {day(2026, 9, 1), day(2027, 1, 1)}}, StatusActive, 66},
+		{"two plans, the one ending later decides", []Period{{day(2026, 10, 1), day(2026, 11, 1)}, {day(2026, 10, 20), day(2026, 10, 29)}}, StatusExpiring, 5},
+		{"two plans both about to end", []Period{{day(2026, 10, 1), day(2026, 10, 29)}, {day(2026, 10, 1), day(2026, 11, 2)}}, StatusExpiring, 6},
+		{"one plan expired, the other current", []Period{{day(2026, 8, 1), day(2026, 9, 1)}, {day(2026, 10, 1), day(2027, 1, 1)}}, StatusActive, 66},
+		{"renewal queued behind a short period is not expiring", []Period{{day(2026, 10, 1), day(2026, 10, 29)}, {day(2026, 10, 29), day(2027, 1, 29)}}, StatusActive, 94},
+		{"a gap of days keeps the member expiring", []Period{{day(2026, 10, 1), day(2026, 10, 29)}, {day(2026, 11, 5), day(2027, 2, 5)}}, StatusExpiring, 2},
+		{"another plan starting the day after continues coverage", []Period{{day(2026, 10, 1), day(2026, 10, 29)}, {day(2026, 10, 30), day(2027, 1, 30)}}, StatusActive, 95},
+		{"chain of queued periods", []Period{{day(2026, 10, 1), day(2026, 10, 28)}, {day(2026, 10, 28), day(2026, 11, 28)}, {day(2026, 11, 28), day(2026, 12, 28)}}, StatusActive, 62},
 	}
 	for _, c := range cases {
 		status, days := StatusOf(c.periods, today)
@@ -103,4 +112,20 @@ func TestAccessBranches(t *testing.T) {
 	assert.ErrorIs(t, err, ErrAccessBranches, "home branch missing")
 	_, err = AccessBranches(ScopeGym, a1, all, []uuid.UUID{a1.ID, uuid.New()})
 	assert.ErrorIs(t, err, ErrAccessBranches, "foreign branch")
+}
+
+func TestPeriodsAreHalfOpenForOverlap(t *testing.T) {
+	jan := Period{StartsOn: day(2026, 1, 1), EndsOn: day(2026, 2, 1)}
+	assert.False(t, Overlaps(jan, Period{StartsOn: day(2026, 2, 1), EndsOn: day(2026, 3, 1)}), "starting on the end date is a renewal, not an overlap")
+	assert.False(t, Overlaps(Period{StartsOn: day(2026, 2, 1), EndsOn: day(2026, 3, 1)}, jan))
+	assert.True(t, Overlaps(jan, Period{StartsOn: day(2026, 1, 31), EndsOn: day(2026, 3, 1)}), "one day earlier overlaps")
+	assert.True(t, Overlaps(jan, Period{StartsOn: day(2026, 1, 10), EndsOn: day(2026, 1, 20)}), "contained")
+	assert.True(t, Overlaps(jan, jan))
+	assert.False(t, Overlaps(jan, Period{StartsOn: day(2026, 3, 1), EndsOn: day(2026, 4, 1)}))
+}
+
+func TestEndedPeriod(t *testing.T) {
+	p := Period{StartsOn: day(2026, 1, 1), EndsOn: day(2026, 2, 1)}
+	assert.False(t, Ended(p, day(2026, 2, 1)), "the end date is still a covered day")
+	assert.True(t, Ended(p, day(2026, 2, 2)))
 }

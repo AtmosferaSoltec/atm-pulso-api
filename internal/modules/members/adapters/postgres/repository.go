@@ -3,6 +3,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members/app"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members/domain"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/ids"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/memberstatus"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/receipts"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/tx"
 )
@@ -29,19 +32,17 @@ func formatDate(t time.Time) string { return t.Format("2006-01-02") }
 // statusBase computes only the status in SQL (a cheap aggregate per member), so filtering, counting
 // and paging happen before the heavier per-row details are looked up.
 // $1 gym, $2 today (Lima), $3 search text, $4 home branch (or NULL), $5 member id (or NULL).
-const statusBase = `
-WITH base AS (
+var statusBase = memberstatus.Prefix("$1", "$2::date") + `, base AS (
   SELECT m.id, m.document_type, m.document_number, m.full_name, m.phone, m.created_at, m.home_branch_id,
-         CASE WHEN COALESCE(s.active_now, false) THEN
-                CASE WHEN s.latest_end - $2::date <= 7 THEN 'expiring' ELSE 'active' END
+         CASE WHEN cv.end_on IS NOT NULL THEN
+                CASE WHEN cv.end_on - $2::date <= 7 THEN 'expiring' ELSE 'active' END
               WHEN COALESCE(s.scheduled, false) THEN 'scheduled'
               ELSE 'expired' END AS status,
-         COALESCE(s.latest_end - $2::date, 0) AS days_remaining
+         COALESCE(COALESCE(cv.end_on, s.latest_end) - $2::date, 0) AS days_remaining
   FROM members m
+  LEFT JOIN coverage cv ON cv.member_id = m.id
   LEFT JOIN LATERAL (
-    SELECT max(ends_on) AS latest_end,
-           bool_or(starts_on <= $2::date AND ends_on >= $2::date) AS active_now,
-           bool_or(starts_on > $2::date) AS scheduled
+    SELECT max(ends_on) AS latest_end, bool_or(starts_on > $2::date) AS scheduled
     FROM memberships WHERE member_id = m.id) s ON true
   WHERE m.gym_id = $1
     AND ($3::text = '' OR m.full_name ILIKE '%' || $3 || '%' OR m.document_number LIKE '%' || $3 || '%')
@@ -51,18 +52,21 @@ WITH base AS (
 
 // pageQuery selects one page of base and then looks up branch, current period and last receipt
 // for those rows only. $6 status filter (” = any), $7 limit, $8 offset.
-const pageQuery = statusBase + `, page AS (
+var pageQuery = statusBase + `, page AS (
   SELECT * FROM base WHERE ($6::text = '' OR status = $6) ORDER BY created_at DESC, id DESC LIMIT $7 OFFSET $8
 )
 SELECT pg.id, pg.document_type, pg.document_number, pg.full_name, pg.phone, pg.created_at,
        b.id, b.name, COALESCE(g.display_name, g.name), pg.status, pg.days_remaining,
-       COALESCE(cur.months, 0), cur.starts_on, cur.ends_on, lr.number
+       COALESCE(cur.months, 0), cur.starts_on, cur.ends_on, lr.number, cur.plan_name, names.current
 FROM page pg
 JOIN branches b ON b.id = pg.home_branch_id AND b.gym_id = $1
 JOIN gyms g ON g.id = b.gym_id
 LEFT JOIN LATERAL (
-  SELECT months, starts_on, ends_on FROM memberships WHERE member_id = pg.id
+  SELECT months, starts_on, ends_on, plan_name FROM memberships WHERE member_id = pg.id
   ORDER BY (starts_on <= $2::date AND ends_on >= $2::date) DESC, ends_on DESC LIMIT 1) cur ON true
+LEFT JOIN LATERAL (
+  SELECT COALESCE(array_agg(DISTINCT plan_name ORDER BY plan_name), '{}') AS current FROM memberships
+  WHERE member_id = pg.id AND starts_on <= $2::date AND ends_on >= $2::date) names ON true
 LEFT JOIN LATERAL (
   SELECT r.number FROM payments p JOIN receipts r ON r.id = p.receipt_id
   WHERE p.member_id = pg.id ORDER BY p.created_at DESC, r.number DESC LIMIT 1) lr ON true
@@ -75,11 +79,21 @@ func scanMember(row pgx.Row) (app.MemberView, error) {
 	var months int
 	var starts, ends *time.Time
 	var last *int
+	var lastPlan *string
+	var current []string
 	err := row.Scan(&v.ID, &v.DocumentType, &v.DocumentNumber, &v.FullName, &v.Phone, new(time.Time),
 		&v.HomeBranch.ID, &v.HomeBranch.Name, &v.HomeBranch.GymName, &v.Status, &v.DaysRemaining,
-		&months, &starts, &ends, &last)
+		&months, &starts, &ends, &last, &lastPlan, &current)
 	if err != nil {
 		return v, err
+	}
+	// The plans held today; for a member without a current period, the last plan they held.
+	v.PlanNames = current
+	if len(v.PlanNames) == 0 {
+		v.PlanNames = []string{}
+		if lastPlan != nil {
+			v.PlanNames = []string{*lastPlan}
+		}
 	}
 	v.PlanLabel = domain.PlanLabel(months)
 	if starts != nil {
@@ -145,7 +159,7 @@ func (r *Repository) Member(ctx context.Context, gymID, memberID uuid.UUID, toda
 		return app.MemberDetail{}, err
 	}
 	detail := app.MemberDetail{MemberView: view, Memberships: []app.MembershipView{}}
-	rows, err := r.pool.Query(ctx, `SELECT ms.id, ms.months, ms.starts_on, ms.ends_on, ms.amount::text, ms.access_scope, rc.id, rc.kind, rc.number
+	rows, err := r.pool.Query(ctx, `SELECT ms.id, ms.plan_id, ms.plan_name, ms.months, ms.starts_on, ms.ends_on, ms.amount::text, ms.access_scope, ms.amended_at, rc.id, rc.kind, rc.number
 		FROM memberships ms
 		LEFT JOIN payments p ON p.membership_id = ms.id
 		LEFT JOIN receipts rc ON rc.id = p.receipt_id
@@ -158,11 +172,16 @@ func (r *Repository) Member(ctx context.Context, gymID, memberID uuid.UUID, toda
 	for rows.Next() {
 		var m app.MembershipView
 		var starts, ends time.Time
+		var amended *time.Time
 		var receiptID *uuid.UUID
 		var kind *string
 		var number *int
-		if err := rows.Scan(&m.ID, &m.Months, &starts, &ends, &m.Amount, &m.AccessScope, &receiptID, &kind, &number); err != nil {
+		if err := rows.Scan(&m.ID, &m.PlanID, &m.PlanName, &m.Months, &starts, &ends, &m.Amount, &m.AccessScope, &amended, &receiptID, &kind, &number); err != nil {
 			return detail, err
+		}
+		if amended != nil {
+			at := amended.UTC().Format(time.RFC3339)
+			m.AmendedAt = &at
 		}
 		m.PlanLabel, m.StartsOn, m.EndsOn = domain.PlanLabel(m.Months), formatDate(starts), formatDate(ends)
 		m.AccessBranches = []app.AccessBranch{}
@@ -227,8 +246,8 @@ func (r *Repository) UpdateMember(ctx context.Context, gymID, memberID uuid.UUID
 }
 
 func insertPeriod(ctx context.Context, t pgx.Tx, gymID, memberID uuid.UUID, p app.Period) error {
-	if _, err := t.Exec(ctx, `INSERT INTO memberships (id, gym_id, member_id, months, starts_on, ends_on, amount, access_scope)
-		VALUES ($1,$2,$3,$4,$5,$6,$7::numeric,$8)`, p.ID, gymID, memberID, p.Months, p.StartsOn, p.EndsOn, p.Amount, string(p.Scope)); err != nil {
+	if _, err := t.Exec(ctx, `INSERT INTO memberships (id, gym_id, member_id, plan_id, plan_name, months, starts_on, ends_on, amount, access_scope)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::numeric,$10)`, p.ID, gymID, memberID, p.PlanID, p.PlanName, p.Months, p.StartsOn, p.EndsOn, p.Amount, string(p.Scope)); err != nil {
 		return err
 	}
 	for _, branch := range p.BranchIDs {
@@ -272,6 +291,11 @@ func (r *Repository) Enroll(ctx context.Context, e app.Enrollment) (app.SaleIDs,
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
+		planID, planName, err := resolvePlan(ctx, t, e.GymID, e.PlanID)
+		if err != nil {
+			return err
+		}
+		e.Period.PlanID, e.Period.PlanName = planID, planName
 		if _, err := t.Exec(ctx, `INSERT INTO members (id, gym_id, home_branch_id, document_type, document_number, full_name, phone)
 			VALUES ($1,$2,$3,$4,$5,$6,$7)`, e.MemberID, e.GymID, e.HomeBranchID, e.DocumentType, e.DocumentNumber, e.FullName, e.Phone); err != nil {
 			return err
@@ -317,12 +341,22 @@ func (r *Repository) Renew(ctx context.Context, rn app.Renewal, plan app.PlanFun
 				return err
 			}
 		}
+		planID, planName, err := resolvePlan(ctx, t, rn.GymID, rn.PlanID)
+		if err != nil {
+			return err
+		}
+		// A renewal continues the same plan: its default start is where the member's last period of THAT
+		// plan ends, whatever the other plans of the member are doing.
 		var latest *time.Time
-		if err := t.QueryRow(ctx, `SELECT max(ends_on) FROM memberships WHERE member_id=$1`, rn.MemberID).Scan(&latest); err != nil {
+		if err := t.QueryRow(ctx, `SELECT max(ends_on) FROM memberships WHERE member_id=$1 AND plan_id=$2`, rn.MemberID, planID).Scan(&latest); err != nil {
 			return err
 		}
 		period, err := plan(home, latest)
 		if err != nil {
+			return err
+		}
+		period.PlanID, period.PlanName = planID, planName
+		if err := checkOverlap(ctx, t, rn.GymID, rn.MemberID, planID, uuid.Nil, period.StartsOn, period.EndsOn); err != nil {
 			return err
 		}
 		ids.MembershipID = period.ID
@@ -339,7 +373,7 @@ func (r *Repository) Renew(ctx context.Context, rn app.Renewal, plan app.PlanFun
 
 // MemberReceipts lists the receipts of a member, newest first.
 func (r *Repository) MemberReceipts(ctx context.Context, gymID, memberID uuid.UUID) ([]app.ReceiptSummary, error) {
-	rows, err := r.pool.Query(ctx, `SELECT rc.id, rc.kind, rc.number, rc.issued_on, COALESCE(ms.months, 0), p.amount::text, p.method
+	rows, err := r.pool.Query(ctx, `SELECT rc.id, rc.kind, rc.number, rc.issued_on, COALESCE(ms.months, 0), ms.plan_name, p.amount::text, p.method
 		FROM payments p JOIN receipts rc ON rc.id = p.receipt_id
 		LEFT JOIN memberships ms ON ms.id = p.membership_id
 		WHERE p.member_id = $1 AND p.gym_id = $2 ORDER BY rc.issued_on DESC, rc.number DESC`, memberID, gymID)
@@ -353,7 +387,7 @@ func (r *Repository) MemberReceipts(ctx context.Context, gymID, memberID uuid.UU
 		var kind string
 		var number, months int
 		var issued time.Time
-		if err := rows.Scan(&s.ID, &kind, &number, &issued, &months, &s.Amount, &s.Method); err != nil {
+		if err := rows.Scan(&s.ID, &kind, &number, &issued, &months, &s.PlanName, &s.Amount, &s.Method); err != nil {
 			return nil, err
 		}
 		s.Number, s.IssuedOn, s.PlanLabel = receipts.Label(receipts.Kind(kind), number), formatDate(issued), domain.PlanLabel(months)
@@ -416,8 +450,8 @@ func (r *Repository) Receipt(ctx context.Context, gymID, receiptID uuid.UUID) (a
 	if membershipID != nil {
 		var m app.ReceiptMembership
 		var starts, ends time.Time
-		if err := r.pool.QueryRow(ctx, `SELECT months, starts_on, ends_on FROM memberships WHERE id=$1 AND gym_id=$2`,
-			*membershipID, gymID).Scan(&m.Months, &starts, &ends); err != nil {
+		if err := r.pool.QueryRow(ctx, `SELECT months, starts_on, ends_on, plan_name FROM memberships WHERE id=$1 AND gym_id=$2`,
+			*membershipID, gymID).Scan(&m.Months, &starts, &ends, &m.PlanName); err != nil {
 			return d, err
 		}
 		m.PlanLabel, m.StartsOn, m.EndsOn = domain.PlanLabel(m.Months), formatDate(starts), formatDate(ends)
@@ -432,4 +466,122 @@ func (r *Repository) Receipt(ctx context.Context, gymID, receiptID uuid.UUID) (a
 		d.Membership = &m
 	}
 	return d, nil
+}
+
+// checkOverlap returns *domain.OverlapError when the member already holds, in the same plan, a period (other than
+// except) that collides with [starts, ends). The caller holds the member row lock, so two concurrent sales of the
+// same plan cannot both pass.
+func checkOverlap(ctx context.Context, t pgx.Tx, gymID, memberID, planID, except uuid.UUID, starts, ends time.Time) error {
+	var clash domain.OverlapError
+	err := t.QueryRow(ctx, `SELECT id, starts_on, ends_on FROM memberships
+		WHERE gym_id=$1 AND member_id=$2 AND plan_id=$3 AND id <> $4 AND starts_on < $6 AND ends_on > $5
+		ORDER BY starts_on LIMIT 1`, gymID, memberID, planID, except, starts, ends).Scan(&clash.MembershipID, &clash.StartsOn, &clash.EndsOn)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := t.QueryRow(ctx, `SELECT max(ends_on) FROM memberships WHERE gym_id=$1 AND member_id=$2 AND plan_id=$3 AND id <> $4`,
+		gymID, memberID, planID, except).Scan(&clash.SuggestedStart); err != nil {
+		return err
+	}
+	return &clash
+}
+
+// periodState is the JSON stored in membership_amendments.before / after.
+func periodState(months int, starts, ends time.Time, amount, method string) map[string]any {
+	state := map[string]any{"months": months, "starts_on": formatDate(starts), "ends_on": formatDate(ends), "amount": amount}
+	if method != "" {
+		state["method"] = method
+	}
+	return state
+}
+
+// AmendMembership corrects a period in place and records who did it. See app.Repository.
+func (r *Repository) AmendMembership(ctx context.Context, gymID, actorID, memberID, membershipID uuid.UUID, decide app.AmendFunc) (bool, error) {
+	changed := false
+	err := (tx.Runner{Pool: r.pool}).Run(ctx, func(t pgx.Tx) error {
+		var locked uuid.UUID
+		err := t.QueryRow(ctx, `SELECT id FROM members WHERE id=$1 AND gym_id=$2 FOR UPDATE`, memberID, gymID).Scan(&locked)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrMemberNotFound
+		}
+		if err != nil {
+			return err
+		}
+		var cur app.CurrentPeriod
+		err = t.QueryRow(ctx, `SELECT ms.plan_id, ms.months, ms.starts_on, ms.ends_on, ms.amount::text, p.id, COALESCE(p.method, ''), p.branch_id
+			FROM memberships ms LEFT JOIN payments p ON p.membership_id = ms.id AND p.gym_id = ms.gym_id
+			WHERE ms.id=$1 AND ms.member_id=$2 AND ms.gym_id=$3`, membershipID, memberID, gymID).
+			Scan(&cur.PlanID, &cur.Months, &cur.StartsOn, &cur.EndsOn, &cur.Amount, &cur.PaymentID, &cur.Method, &cur.PaymentBranchID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrMembershipNotFound
+		}
+		if err != nil {
+			return err
+		}
+		change, err := decide(cur)
+		if err != nil {
+			return err
+		}
+		if change.Months == cur.Months && change.StartsOn.Equal(cur.StartsOn) && change.EndsOn.Equal(cur.EndsOn) &&
+			change.Amount == cur.Amount && change.Method == cur.Method {
+			return nil
+		}
+		if err := checkOverlap(ctx, t, gymID, memberID, cur.PlanID, membershipID, change.StartsOn, change.EndsOn); err != nil {
+			return err
+		}
+		if _, err := t.Exec(ctx, `UPDATE memberships SET months=$3, starts_on=$4, ends_on=$5, amount=$6::numeric, amended_at=now()
+			WHERE id=$1 AND gym_id=$2`, membershipID, gymID, change.Months, change.StartsOn, change.EndsOn, change.Amount); err != nil {
+			return err
+		}
+		if cur.PaymentID != nil {
+			if _, err := t.Exec(ctx, `UPDATE payments SET amount=$3::numeric, method=$4 WHERE id=$1 AND gym_id=$2`,
+				*cur.PaymentID, gymID, change.Amount, change.Method); err != nil {
+				return err
+			}
+		}
+		before := periodState(cur.Months, cur.StartsOn, cur.EndsOn, cur.Amount, cur.Method)
+		after := periodState(change.Months, change.StartsOn, change.EndsOn, change.Amount, change.Method)
+		beforeJSON, _ := json.Marshal(before)
+		afterJSON, _ := json.Marshal(after)
+		if _, err := t.Exec(ctx, `INSERT INTO membership_amendments (id, gym_id, membership_id, payment_id, changed_by, before, after)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)`, ids.New(), gymID, membershipID, cur.PaymentID, actorID, beforeJSON, afterJSON); err != nil {
+			return err
+		}
+		changed = true
+		return nil
+	})
+	return changed, err
+}
+
+// Amendments lists the corrections of a period, oldest first.
+func (r *Repository) Amendments(ctx context.Context, gymID, memberID, membershipID uuid.UUID) ([]app.AmendmentView, error) {
+	var exists bool
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE id=$1 AND member_id=$2 AND gym_id=$3)`,
+		membershipID, memberID, gymID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, domain.ErrMembershipNotFound
+	}
+	rows, err := r.pool.Query(ctx, `SELECT a.id, a.changed_at, a.changed_by, u.full_name, a.before, a.after
+		FROM membership_amendments a JOIN users u ON u.id = a.changed_by
+		WHERE a.membership_id=$1 AND a.gym_id=$2 ORDER BY a.changed_at, a.id`, membershipID, gymID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []app.AmendmentView{}
+	for rows.Next() {
+		var v app.AmendmentView
+		var at time.Time
+		if err := rows.Scan(&v.ID, &at, &v.ChangedBy.ID, &v.ChangedBy.FullName, &v.Before, &v.After); err != nil {
+			return nil, err
+		}
+		v.ChangedAt = at.UTC().Format(time.RFC3339)
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }

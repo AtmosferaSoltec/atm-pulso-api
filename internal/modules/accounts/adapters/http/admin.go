@@ -18,6 +18,7 @@ func (h *Handler) AdminRoutes(admin gin.IRoutes) {
 	admin.PATCH("/groups/:id", h.renameGroup)
 	admin.DELETE("/groups/:id", h.deleteGroup)
 	admin.PATCH("/gyms/:gym_id", h.updateGymIdentity)
+	admin.PATCH("/gyms/:gym_id/features", h.updateGymFeatures)
 	admin.POST("/gyms/:gym_id/branches", h.addBranch)
 	admin.PATCH("/branches/:id", h.updateBranch)
 	admin.DELETE("/branches/:id", h.deleteBranch)
@@ -102,6 +103,32 @@ func (h *Handler) updateGymIdentity(c *gin.Context) {
 		return
 	}
 	audit(c, "gym.identity", "gym_id", gymID)
+	apierror.OK(c, gym)
+}
+
+type featuresRequest struct {
+	Features []string `json:"features"`
+}
+
+func (h *Handler) updateGymFeatures(c *gin.Context) {
+	gymID, ok := pathID(c, "gym_id")
+	if !ok {
+		return
+	}
+	var req featuresRequest
+	if !bind(c, &req) {
+		return
+	}
+	if req.Features == nil {
+		apierror.Respond(c, apierror.Validation(apierror.FieldError{Field: "features", Code: "FEATURES_INVALID"}))
+		return
+	}
+	gym, err := h.service.UpdateGymFeatures(c.Request.Context(), gymID, req.Features)
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	audit(c, "gym.features", "gym_id", gymID, "features", gym.Features)
 	apierror.OK(c, gym)
 }
 

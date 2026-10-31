@@ -24,16 +24,14 @@ func (o *Optional[T]) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &o.Value)
 }
 
-// GymChanges is what the admin of a gym may change: day pass price, branch sharing and membership
-// prices. The display name and the colour are kept only to answer 403: the identity of a gym is
+// GymChanges is what the admin of a gym may change: day pass price and branch sharing (membership prices
+// belong to the plans of the members module). The display name and the colour are kept only to answer 403: the identity of a gym is
 // configured by Atmósfera from the console, not by the gym.
 type GymChanges struct {
 	DisplayName   Optional[string] `json:"display_name"`
 	BrandColor    Optional[string] `json:"brand_color"`
 	DayPassPrice  Optional[string] `json:"day_pass_price"`
 	BranchSharing Optional[bool]   `json:"branch_sharing"`
-	// MembershipPrices replaces the whole price list of the gym.
-	MembershipPrices Optional[[]MembershipPrice] `json:"membership_prices"`
 }
 
 type GymRepository interface {
@@ -44,30 +42,7 @@ type GymRepository interface {
 var colorPattern = regexp.MustCompile(`^#[0-9a-f]{6}$`)
 var pricePattern = regexp.MustCompile(`^[0-9]{1,7}\.[0-9]{2}$`)
 
-const maxMembershipMonths = 24
-
-// normalizePrices accepts one price per duration (1 to 24 whole months) and returns the list in
-// the order given: it is the order the gym wants them offered when selling. It reports false for a repeated or out-of-range duration or a bad amount.
-func normalizePrices(prices []MembershipPrice) ([]MembershipPrice, bool) {
-	if len(prices) > maxMembershipMonths {
-		return nil, false
-	}
-	seen := make(map[int]bool, len(prices))
-	for _, price := range prices {
-		if price.Months < 1 || price.Months > maxMembershipMonths || seen[price.Months] || !pricePattern.MatchString(price.Amount) {
-			return nil, false
-		}
-		cents, err := strconv.ParseInt(strings.ReplaceAll(price.Amount, ".", ""), 10, 64)
-		if err != nil || cents > 100_000_000 {
-			return nil, false
-		}
-		seen[price.Months] = true
-	}
-	return append([]MembershipPrice{}, prices...), true
-}
-
-// UpdateGym changes the rules of the admin's current gym: day pass price, branch sharing and
-// membership prices. Its identity (name, RUC, colour) and branches are not the gym's to change.
+// UpdateGym changes the rules of the admin's current gym: day pass price and branch sharing. Its identity (name, RUC, colour) and branches are not the gym's to change.
 func (s *Service) UpdateGym(ctx context.Context, p auth.Principal, id uuid.UUID, input GymChanges) (Gym, error) {
 	if !p.CanManageGym(id) {
 		if p.Role != auth.RoleAdmin {
@@ -90,16 +65,6 @@ func (s *Service) UpdateGym(ctx context.Context, p auth.Principal, id uuid.UUID,
 		if err != nil || cents > 100_000_000 {
 			return Gym{}, fieldError("day_pass_price", "PRICE_INVALID")
 		}
-	}
-	if input.MembershipPrices.Set {
-		if input.MembershipPrices.Value == nil {
-			return Gym{}, fieldError("membership_prices", "PRICES_INVALID")
-		}
-		prices, ok := normalizePrices(*input.MembershipPrices.Value)
-		if !ok {
-			return Gym{}, fieldError("membership_prices", "PRICES_INVALID")
-		}
-		input.MembershipPrices.Value = &prices
 	}
 	if err := s.Gyms.UpdateGym(ctx, id, input); err != nil {
 		return Gym{}, err

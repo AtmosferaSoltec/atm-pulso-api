@@ -25,9 +25,12 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/storageapi"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/access"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/bodytracking"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/kiosk"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/sales"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers"
 	vouchersstorage "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers/adapters/storage"
 	vouchersapp "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers/app"
@@ -152,6 +155,9 @@ func run() int {
 	members.New(members.Deps{Pool: pool, Clock: clock.System{}, Logos: logos}).Routes(protected)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
 	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected)
+	kiosk.New(kiosk.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	sales.New(sales.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	bodytracking.New(bodytracking.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
 	// The CSV download is heavy: it shares the tighter per-IP limit.
 	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, heavy)
 

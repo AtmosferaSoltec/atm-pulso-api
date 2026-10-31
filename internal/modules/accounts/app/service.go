@@ -82,7 +82,7 @@ func (s *Service) Resolve(ctx context.Context, claims auth.Claims) (auth.Princip
 
 	principal := auth.Principal{
 		UserID: user.ID, GroupID: tenancy.GroupID, GymID: tenancy.GymID, TenantID: tenantID,
-		Role: auth.Role(role),
+		Role: auth.Role(role), Features: featuresOf(tenancy.Features),
 	}
 	if role == domain.RoleReceptionist {
 		principal.BranchIDs, err = s.Users.BranchIDs(ctx, user.ID)
@@ -133,6 +133,7 @@ func (s *Service) profileOf(ctx context.Context, p auth.Principal, user domain.U
 	if err != nil {
 		return Profile{}, fmt.Errorf("load scope: %w", err)
 	}
+	scope.Gym.Features = KnownFeatures(scope.Gym.Features)
 	return Profile{User: user, Scope: scope, LogoURL: s.logoOf(ctx, p)}, nil
 }
 
@@ -148,4 +149,27 @@ func (s *Service) UpdateProfile(ctx context.Context, p auth.Principal, fullName,
 		return Profile{}, fmt.Errorf("update profile: %w", err)
 	}
 	return s.profileOf(ctx, p, user)
+}
+
+// KnownFeatures keeps only the module names the code knows, in the fixed order, and never returns nil.
+func KnownFeatures(stored []string) []string {
+	out := []string{}
+	for _, f := range featuresOf(stored) {
+		out = append(out, string(f))
+	}
+	return out
+}
+
+// featuresOf turns the stored names into the closed list, ignoring any name the code no longer knows.
+func featuresOf(stored []string) []auth.Feature {
+	features := []auth.Feature{}
+	for _, f := range auth.AllFeatures {
+		for _, name := range stored {
+			if string(f) == name {
+				features = append(features, f)
+				break
+			}
+		}
+	}
+	return features
 }

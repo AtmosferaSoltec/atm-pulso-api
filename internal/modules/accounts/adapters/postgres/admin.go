@@ -36,13 +36,13 @@ func (r *Repository) Groups(ctx context.Context) ([]app.AdminGroup, error) {
 	}
 
 	gymIndex := map[uuid.UUID][2]int{}
-	rows, err = r.pool.Query(ctx, `SELECT id, group_id, auth_tenant_id, auth_client_id, tax_id, name, brand_color FROM gyms ORDER BY name, id`)
+	rows, err = r.pool.Query(ctx, `SELECT id, group_id, auth_tenant_id, auth_client_id, tax_id, name, brand_color, features FROM gyms ORDER BY name, id`)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		gym := app.AdminGym{Branches: []app.AdminBranch{}}
-		if err := rows.Scan(&gym.ID, &gym.GroupID, &gym.AuthTenantID, &gym.AuthClientID, &gym.RUC, &gym.Name, &gym.BrandColor); err != nil {
+		if err := rows.Scan(&gym.ID, &gym.GroupID, &gym.AuthTenantID, &gym.AuthClientID, &gym.RUC, &gym.Name, &gym.BrandColor, &gym.Features); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -135,14 +135,34 @@ func (r *Repository) UpdateGymIdentity(ctx context.Context, gymID uuid.UUID, col
 		}
 	}
 	err := r.pool.QueryRow(ctx, `UPDATE gyms SET brand_color = COALESCE($2, brand_color), group_id = COALESCE($3, group_id), updated_at = now() WHERE id = $1
-		RETURNING id, group_id, auth_tenant_id, auth_client_id, tax_id, name, brand_color`, gymID, color, groupID).
-		Scan(&gym.ID, &gym.GroupID, &gym.AuthTenantID, &gym.AuthClientID, &gym.RUC, &gym.Name, &gym.BrandColor)
+		RETURNING id, group_id, auth_tenant_id, auth_client_id, tax_id, name, brand_color, features`, gymID, color, groupID).
+		Scan(&gym.ID, &gym.GroupID, &gym.AuthTenantID, &gym.AuthClientID, &gym.RUC, &gym.Name, &gym.BrandColor, &gym.Features)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.AdminGym{}, domain.ErrResourceNotFound
 	}
 	if err != nil {
 		return app.AdminGym{}, err
 	}
+	return r.withBranches(ctx, gym)
+}
+
+// UpdateGymFeatures replaces the modules a gym has switched on and returns the gym with its branches.
+func (r *Repository) UpdateGymFeatures(ctx context.Context, gymID uuid.UUID, features []string) (app.AdminGym, error) {
+	gym := app.AdminGym{Branches: []app.AdminBranch{}}
+	err := r.pool.QueryRow(ctx, `UPDATE gyms SET features = $2, updated_at = now() WHERE id = $1
+		RETURNING id, group_id, auth_tenant_id, auth_client_id, tax_id, name, brand_color, features`, gymID, features).
+		Scan(&gym.ID, &gym.GroupID, &gym.AuthTenantID, &gym.AuthClientID, &gym.RUC, &gym.Name, &gym.BrandColor, &gym.Features)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return app.AdminGym{}, domain.ErrResourceNotFound
+	}
+	if err != nil {
+		return app.AdminGym{}, err
+	}
+	return r.withBranches(ctx, gym)
+}
+
+func (r *Repository) withBranches(ctx context.Context, gym app.AdminGym) (app.AdminGym, error) {
+	gymID := gym.ID
 	rows, err := r.pool.Query(ctx, `SELECT id, name, address FROM branches WHERE gym_id = $1 ORDER BY created_at, id`, gymID)
 	if err != nil {
 		return app.AdminGym{}, err

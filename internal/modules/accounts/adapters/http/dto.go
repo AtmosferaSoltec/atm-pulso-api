@@ -15,6 +15,8 @@ type gymDTO struct {
 	Name       string  `json:"name"`
 	BrandColor string  `json:"brand_color"`
 	LogoURL    *string `json:"logo_url"`
+	// Features are the optional modules the gym has: "sales", "body_tracking", "kiosk".
+	Features []string `json:"features"`
 }
 
 type branchDTO struct {
@@ -41,7 +43,7 @@ func toUserDTO(profile app.Profile, role auth.Role) userDTO {
 		DocumentNumber: user.DocumentNumber,
 		FullName:       user.FullName,
 		Role:           string(role),
-		Gym:            gymDTO{ID: scope.Gym.ID.String(), Name: scope.Gym.Name, BrandColor: scope.Gym.BrandColor, LogoURL: profile.LogoURL},
+		Gym:            gymDTO{ID: scope.Gym.ID.String(), Name: scope.Gym.Name, BrandColor: scope.Gym.BrandColor, LogoURL: profile.LogoURL, Features: scope.Gym.Features},
 		Branches:       make([]branchDTO, 0, len(scope.Branches)),
 	}
 	if user.Phone != "" {

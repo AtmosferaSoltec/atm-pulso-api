@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -29,8 +30,13 @@ func (h *Handler) Routes(protected gin.IRoutes) {
 	protected.GET("/members/:id", h.get)
 	protected.PATCH("/members/:id", h.update)
 	protected.POST("/members/:id/renewals", h.renew)
+	protected.PATCH("/members/:id/memberships/:membership_id", h.amend)
+	protected.GET("/members/:id/memberships/:membership_id/amendments", h.amendments)
 	protected.GET("/members/:id/receipts", h.memberReceipts)
 	protected.GET("/receipts/:id", h.receipt)
+	protected.GET("/membership-plans", h.plans)
+	protected.POST("/membership-plans", h.createPlan)
+	protected.PATCH("/membership-plans/:id", h.updatePlan)
 }
 
 var statuses = map[string]bool{"": true, "active": true, "expiring": true, "expired": true, "scheduled": true}
@@ -92,6 +98,51 @@ func (h *Handler) renew(c *gin.Context) {
 		return
 	}
 	answer(c, sale, existed)
+}
+
+func membershipIDs(c *gin.Context) (uuid.UUID, uuid.UUID, bool) {
+	member, ok := pathID(c)
+	if !ok {
+		return uuid.Nil, uuid.Nil, false
+	}
+	membership, err := uuid.Parse(c.Param("membership_id"))
+	if err != nil || membership == uuid.Nil {
+		apierror.Respond(c, apierror.ErrNotFound)
+		return uuid.Nil, uuid.Nil, false
+	}
+	return member, membership, true
+}
+
+func (h *Handler) amend(c *gin.Context) {
+	memberID, membershipID, ok := membershipIDs(c)
+	if !ok {
+		return
+	}
+	var in app.AmendInput
+	if !bind(c, &in) {
+		return
+	}
+	p, _ := auth.FromContext(c.Request.Context())
+	sale, err := h.service.AmendMembership(c.Request.Context(), p, memberID, membershipID, in)
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	apierror.OK(c, sale)
+}
+
+func (h *Handler) amendments(c *gin.Context) {
+	memberID, membershipID, ok := membershipIDs(c)
+	if !ok {
+		return
+	}
+	p, _ := auth.FromContext(c.Request.Context())
+	list, err := h.service.Amendments(c.Request.Context(), p, memberID, membershipID)
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	apierror.OK(c, list)
 }
 
 func answer(c *gin.Context, sale app.Sale, existed bool) {
@@ -211,7 +262,16 @@ func pagination(c *gin.Context) (int, int, bool) {
 func respond(c *gin.Context, err error) {
 	var validation *domain.ValidationError
 	var taken *domain.DocumentTakenError
+	var overlap *domain.OverlapError
 	switch {
+	case errors.As(err, &overlap):
+		apierror.Respond(c, apierror.New(http.StatusConflict, "MEMBERSHIP_OVERLAP", "Ya tiene una membresía de este plan en esas fechas. Renuévala desde el día en que termina.").
+			WithDetails(gin.H{"membership_id": overlap.MembershipID, "starts_on": formatDay(overlap.StartsOn), "ends_on": formatDay(overlap.EndsOn),
+				"suggested_starts_on": formatDay(overlap.SuggestedStart)}))
+	case errors.Is(err, domain.ErrMembershipNotFound):
+		apierror.Respond(c, apierror.New(http.StatusNotFound, "MEMBERSHIP_NOT_FOUND", "La membresía ya no existe."))
+	case errors.Is(err, domain.ErrMembershipEnded):
+		apierror.Respond(c, apierror.New(http.StatusConflict, "MEMBERSHIP_ENDED", "La membresía ya terminó y no se puede modificar."))
 	case errors.As(err, &validation):
 		fields := make([]apierror.FieldError, 0, len(validation.Issues))
 		for _, issue := range validation.Issues {
@@ -223,6 +283,10 @@ func respond(c *gin.Context, err error) {
 			WithDetails(gin.H{"member_id": taken.MemberID}))
 	case errors.Is(err, domain.ErrMemberNotFound):
 		apierror.Respond(c, apierror.New(http.StatusNotFound, "MEMBER_NOT_FOUND", "El miembro ya no existe."))
+	case errors.Is(err, domain.ErrPlanNotFound):
+		apierror.Respond(c, apierror.New(http.StatusNotFound, "PLAN_NOT_FOUND", "El plan ya no existe."))
+	case errors.Is(err, domain.ErrPlanNameTaken):
+		apierror.Respond(c, apierror.New(http.StatusConflict, "PLAN_NAME_TAKEN", "Ya tienes un plan con ese nombre."))
 	case errors.Is(err, domain.ErrReceiptNotFound):
 		apierror.Respond(c, apierror.ErrNotFound)
 	case errors.Is(err, branchdir.ErrNotFound):
@@ -239,3 +303,5 @@ func respond(c *gin.Context, err error) {
 		apierror.Respond(c, err)
 	}
 }
+
+func formatDay(t time.Time) string { return t.Format("2006-01-02") }

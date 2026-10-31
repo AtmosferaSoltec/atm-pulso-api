@@ -25,15 +25,9 @@ type Gym struct {
 	BranchSharing         bool      `json:"branch_sharing"`
 	// LogoURL is a temporary signed address of the logo in the company profile; null when none.
 	LogoURL *string `json:"logo_url"`
-	// MembershipPrices is the gym's base price per duration, ordered by months.
-	MembershipPrices []MembershipPrice `json:"membership_prices"`
-	Branches         []Branch          `json:"branches"`
-}
-
-// MembershipPrice is the base price of a membership of the given whole months.
-type MembershipPrice struct {
-	Months int    `json:"months"`
-	Amount string `json:"amount"`
+	// Features are the optional modules the gym has switched on ("sales", "body_tracking", "kiosk").
+	Features []string `json:"features"`
+	Branches []Branch `json:"branches"`
 }
 
 type Branch struct {
@@ -56,6 +50,7 @@ func (s *Service) Catalog(ctx context.Context, principal auth.Principal) (Catalo
 	for gi := range catalog.Gyms {
 		gym := &catalog.Gyms[gi]
 		gym.LogoURL = s.logoOf(ctx, principal)
+		gym.Features = KnownFeatures(gym.Features)
 		for bi := range gym.Branches {
 			branch := &gym.Branches[bi]
 			branch.Accessible = principal.CanAccessBranch(auth.BranchRef{ID: branch.ID, GymID: gym.ID})

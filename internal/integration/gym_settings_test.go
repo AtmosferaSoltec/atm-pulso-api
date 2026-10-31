@@ -43,32 +43,3 @@ func TestGymSettings(t *testing.T) {
 	assert.Equal(t, "15.00", cleared.data()["day_pass_price"])
 	assert.Equal(t, false, cleared.data()["branch_sharing"], "a field not sent stays")
 }
-
-func TestGymMembershipPrices(t *testing.T) {
-	h := newHarness(t)
-	tn := h.newTenant(t)
-	admin := h.token(t, tn.Admin)
-	path := "/gyms/" + tn.GymOne.String()
-	for _, value := range []any{
-		nil, "100.00", []any{map[string]any{"months": 0, "amount": "10.00"}}, []any{map[string]any{"months": 25, "amount": "10.00"}},
-		[]any{map[string]any{"months": 1, "amount": "10"}}, []any{map[string]any{"months": 1, "amount": "-1.00"}},
-		[]any{map[string]any{"months": 1, "amount": "10.00"}, map[string]any{"months": 1, "amount": "12.00"}},
-	} {
-		assert.Equal(t, 400, h.call(t, http.MethodPatch, path, admin, map[string]any{"membership_prices": value}).status, value)
-	}
-	saved := h.call(t, http.MethodPatch, path, admin, map[string]any{"membership_prices": []any{
-		map[string]any{"months": 2, "amount": "180.00"}, map[string]any{"months": 1, "amount": "100.00"},
-	}})
-	require.Equal(t, 200, saved.status, saved.body)
-	// The order sent is the order kept.
-	assert.Equal(t, []any{
-		map[string]any{"months": float64(2), "amount": "180.00"}, map[string]any{"months": float64(1), "amount": "100.00"},
-	}, saved.data()["membership_prices"])
-	// Other fields leave the list alone; an empty list clears it.
-	other := h.call(t, http.MethodPatch, path, admin, map[string]any{"day_pass_price": "20.00"})
-	require.Equal(t, 200, other.status, other.body)
-	assert.Len(t, other.data()["membership_prices"], 2)
-	cleared := h.call(t, http.MethodPatch, path, admin, map[string]any{"membership_prices": []any{}})
-	require.Equal(t, 200, cleared.status, cleared.body)
-	assert.Empty(t, cleared.data()["membership_prices"])
-}

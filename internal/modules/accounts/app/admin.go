@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts/domain"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/logger"
 )
 
@@ -26,10 +27,12 @@ type AdminGym struct {
 	AuthTenantID uuid.UUID `json:"auth_tenant_id"`
 	AuthClientID uuid.UUID `json:"auth_client_id"`
 	// RUC is null when the company has none.
-	RUC        *string       `json:"ruc"`
-	Name       string        `json:"name"`
-	BrandColor string        `json:"brand_color"`
-	Branches   []AdminBranch `json:"branches"`
+	RUC        *string `json:"ruc"`
+	Name       string  `json:"name"`
+	BrandColor string  `json:"brand_color"`
+	// Features are the optional modules the gym has switched on ("sales", "body_tracking", "kiosk").
+	Features []string      `json:"features"`
+	Branches []AdminBranch `json:"branches"`
 }
 
 // AdminGroup is an internal label that bundles related gyms. It is not a user.
@@ -64,6 +67,9 @@ type AdminRepository interface {
 	// UpdateGymIdentity sets the colour and/or the group of a gym (nil leaves it as is). It returns
 	// domain.ErrResourceNotFound when the gym does not exist and domain.ErrForeignScope when the group does not.
 	UpdateGymIdentity(ctx context.Context, gymID uuid.UUID, color *string, groupID *uuid.UUID) (AdminGym, error)
+	// UpdateGymFeatures replaces the modules a gym has switched on. It returns domain.ErrResourceNotFound
+	// when the gym does not exist.
+	UpdateGymFeatures(ctx context.Context, gymID uuid.UUID, features []string) (AdminGym, error)
 	// AddBranch returns domain.ErrResourceNotFound when the gym does not exist.
 	AddBranch(ctx context.Context, gymID uuid.UUID, name string, address *string) (AdminBranch, error)
 	UpdateBranch(ctx context.Context, id uuid.UUID, changes BranchChanges) (AdminBranch, error)
@@ -141,7 +147,13 @@ func (s *Service) SyncGyms(ctx context.Context) {
 // ListGroups is the superadmin's view: every group with its gyms and branches.
 func (s *Service) ListGroups(ctx context.Context) ([]AdminGroup, error) {
 	s.SyncGyms(ctx)
-	return s.Admin.Groups(ctx)
+	groups, err := s.Admin.Groups(ctx)
+	for gi := range groups {
+		for yi := range groups[gi].Gyms {
+			groups[gi].Gyms[yi].Features = KnownFeatures(groups[gi].Gyms[yi].Features)
+		}
+	}
+	return groups, err
 }
 
 // CreateGroup adds an empty group. Only the superadmin does.
@@ -188,6 +200,20 @@ func (s *Service) UpdateGymIdentity(ctx context.Context, gymID uuid.UUID, input 
 		return AdminGym{}, fieldError("brand_color", "BRAND_COLOR_INVALID")
 	}
 	return s.Admin.UpdateGymIdentity(ctx, gymID, color, group)
+}
+
+// UpdateGymFeatures switches the optional modules of a gym (the complete list: what is not sent is off). Only the
+// superadmin does, from the console. Unknown names are refused; repeats are ignored.
+func (s *Service) UpdateGymFeatures(ctx context.Context, gymID uuid.UUID, names []string) (AdminGym, error) {
+	features, ok := auth.NormalizeFeatures(names)
+	if !ok {
+		return AdminGym{}, fieldError("features", "FEATURES_INVALID")
+	}
+	stored := make([]string, len(features))
+	for i, f := range features {
+		stored[i] = string(f)
+	}
+	return s.Admin.UpdateGymFeatures(ctx, gymID, stored)
 }
 
 // AddBranch creates a branch in a gym. Only the superadmin does: Atmósfera charges per branch.

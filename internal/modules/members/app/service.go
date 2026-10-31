@@ -33,12 +33,14 @@ type LogoResolver interface {
 
 // EnrollInput is the body of POST /members.
 type EnrollInput struct {
-	ID              uuid.UUID   `json:"id"`
-	BranchID        uuid.UUID   `json:"branch_id"`
-	DocumentType    string      `json:"document_type"`
-	DocumentNumber  string      `json:"document_number"`
-	FullName        string      `json:"full_name"`
-	Phone           string      `json:"phone"`
+	ID             uuid.UUID `json:"id"`
+	BranchID       uuid.UUID `json:"branch_id"`
+	DocumentType   string    `json:"document_type"`
+	DocumentNumber string    `json:"document_number"`
+	FullName       string    `json:"full_name"`
+	Phone          string    `json:"phone"`
+	// PlanID is optional when the gym has exactly one active plan.
+	PlanID          *uuid.UUID  `json:"plan_id"`
 	Months          int         `json:"months"`
 	StartsOn        string      `json:"starts_on"`
 	Amount          string      `json:"amount"`
@@ -49,8 +51,10 @@ type EnrollInput struct {
 
 // RenewInput is the body of POST /members/{id}/renewals.
 type RenewInput struct {
-	ID              uuid.UUID   `json:"id"`
-	BranchID        uuid.UUID   `json:"branch_id"`
+	ID       uuid.UUID `json:"id"`
+	BranchID uuid.UUID `json:"branch_id"`
+	// PlanID is optional when the gym has exactly one active plan. A renewal continues the plan chosen.
+	PlanID          *uuid.UUID  `json:"plan_id"`
 	Months          int         `json:"months"`
 	StartsOn        string      `json:"starts_on"`
 	Amount          string      `json:"amount"`
@@ -213,7 +217,7 @@ func (s *Service) Enroll(ctx context.Context, p auth.Principal, in EnrollInput) 
 		DocumentType: in.DocumentType, DocumentNumber: in.DocumentNumber, FullName: name, Phone: in.Phone,
 		Period: Period{ID: ids.New(), Months: in.Months, StartsOn: start, EndsOn: domain.EndDate(start, in.Months),
 			Amount: amount, Scope: scope, BranchIDs: branchIDs},
-		Method: in.Method, Today: s.today(),
+		PlanID: in.PlanID, Method: in.Method, Today: s.today(),
 	})
 	if err != nil {
 		return Sale{}, false, err
@@ -272,7 +276,7 @@ func (s *Service) Renew(ctx context.Context, p auth.Principal, memberID uuid.UUI
 	}
 	saleIDs, existed, err := s.Repo.Renew(ctx, Renewal{
 		GymID: p.GymID, ActorID: p.UserID, MemberID: memberID, PeriodID: in.ID,
-		CollectedBranchID: collected.ID, Method: in.Method, Today: today,
+		CollectedBranchID: collected.ID, PlanID: in.PlanID, Method: in.Method, Today: today,
 	}, plan)
 	if err != nil {
 		return Sale{}, false, err
@@ -320,4 +324,85 @@ func toDomain(branches []BranchInfo) []domain.Branch {
 		out[i] = domain.Branch{ID: b.ID, GymID: b.GymID}
 	}
 	return out
+}
+
+// AmendMembership corrects a period that has not ended: months, start date, amount and payment method. The end date is
+// recalculated here from start and months; the period cannot overlap another of the same plan (domain.OverlapError); the
+// payment and the receipt are corrected in place (same number) and the change is recorded with the author (see
+// business-rules.md section 7c). Both roles may do it, in a branch they can reach (the branch that collected the payment).
+func (s *Service) AmendMembership(ctx context.Context, p auth.Principal, memberID, membershipID uuid.UUID, in AmendInput) (Sale, error) {
+	var issues []domain.Issue
+	if in.Months == nil && in.StartsOn == nil && in.Amount == nil && in.Method == nil {
+		issues = append(issues, domain.Issue{Field: "body", Code: domain.CodeNoChanges})
+	}
+	if in.Months != nil && (*in.Months < 1 || *in.Months > 24) {
+		issues = append(issues, domain.Issue{Field: "months", Code: domain.CodeMonths})
+	}
+	var newAmount string
+	if in.Amount != nil {
+		normalized, ok := normalizeAmount(*in.Amount)
+		if !ok {
+			issues = append(issues, domain.Issue{Field: "amount", Code: domain.CodeAmount})
+		}
+		newAmount = normalized
+	}
+	if in.Method != nil && !receipts.Methods[*in.Method] {
+		issues = append(issues, domain.Issue{Field: "method", Code: domain.CodeMethod})
+	}
+	var newStart *time.Time
+	if in.StartsOn != nil {
+		t, err := time.Parse("2006-01-02", *in.StartsOn)
+		if err != nil {
+			issues = append(issues, domain.Issue{Field: "starts_on", Code: domain.CodeStartDate})
+		}
+		newStart = &t
+	}
+	if len(issues) > 0 {
+		return Sale{}, &domain.ValidationError{Issues: issues}
+	}
+	today := s.today()
+	_, err := s.Repo.AmendMembership(ctx, p.GymID, p.UserID, memberID, membershipID, func(cur CurrentPeriod) (PeriodChange, error) {
+		if domain.Ended(domain.Period{StartsOn: cur.StartsOn, EndsOn: cur.EndsOn}, today) {
+			return PeriodChange{}, domain.ErrMembershipEnded
+		}
+		if cur.PaymentBranchID != nil {
+			branch, err := s.Directory.Branch(ctx, p.GymID, *cur.PaymentBranchID)
+			if err != nil {
+				return PeriodChange{}, err
+			}
+			if !p.CanAccessBranch(auth.BranchRef{ID: branch.ID, GymID: branch.GymID}) {
+				return PeriodChange{}, domain.ErrBranchNotAccessible
+			}
+		}
+		change := PeriodChange{Months: cur.Months, StartsOn: cur.StartsOn, Amount: cur.Amount, Method: cur.Method}
+		if in.Months != nil {
+			change.Months = *in.Months
+		}
+		if newStart != nil {
+			change.StartsOn = *newStart
+		}
+		if in.Amount != nil {
+			change.Amount = newAmount
+		}
+		if in.Method != nil {
+			change.Method = *in.Method
+		}
+		change.EndsOn = domain.EndDate(change.StartsOn, change.Months)
+		if change.EndsOn.Before(today) {
+			return PeriodChange{}, &domain.ValidationError{Issues: []domain.Issue{{Field: "starts_on", Code: domain.CodePeriodEnded}}}
+		}
+		return change, nil
+	})
+	if err != nil {
+		return Sale{}, err
+	}
+	return s.sale(ctx, p.GymID, SaleIDs{MemberID: memberID, MembershipID: membershipID})
+}
+
+// Amendments is the history of corrections of a period (admin only).
+func (s *Service) Amendments(ctx context.Context, p auth.Principal, memberID, membershipID uuid.UUID) ([]AmendmentView, error) {
+	if p.Role != auth.RoleAdmin {
+		return nil, domain.ErrForbidden
+	}
+	return s.Repo.Amendments(ctx, p.GymID, memberID, membershipID)
 }

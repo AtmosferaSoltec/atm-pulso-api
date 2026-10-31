@@ -52,7 +52,8 @@ token is the *current gym*). Everything the user sees is in Spanish; identifiers
 | Payments list | yes | yes, **without KPIs** |
 | Gym rules (*Gimnasios y reglas*) | its gym | no |
 | Team (*Usuarios*) | its gym | no |
-| Prices (*Tarifas*) | its gym | no |
+| Plans and rates (*Planes y tarifas*) | its gym | no |
+| Pages of an optional module | only if the gym has the module (section 7b) | same |
 
 The gym's identity (name, colour, logo) and its branches are configured by Atmósfera from console-web.
 
@@ -112,8 +113,8 @@ The gym's identity (name, colour, logo) and its branches are configured by Atmó
 ## 7. Memberships and enrollment  (`features/members/services/enrollment.ts`, `EnrollmentFields.tsx`)
 
 - Memberships are sold **by whole months only**, `months` from 1 to 24. No days, no discounts.
-- `start` date defaults to today; a **renewal** defaults to the current end date if it is in the
-  future, otherwise today. The start can be set to a future date (the member is then *scheduled*).
+- `start` date defaults to today; a **renewal** defaults to the end date of the member's last period
+  **of the same plan** if it is in the future, otherwise today. The start can be set to a future date (the member is then *scheduled*).
 - `end` = `start` + `months` calendar months; if the day does not exist in the target month it
   clamps to the last day of that month (Jan 31 + 1 month = Feb 28/29). Computed **on the server**.
 - `amount` is the total charged, a non-negative money value. Any discount is negotiated by typing the
@@ -123,7 +124,7 @@ The gym's identity (name, colour, logo) and its branches are configured by Atmó
   *Tarjeta*, *Transferencia*).
 - Each enrollment and each renewal creates a **new period** (membership row), a **payment**, and a
   **receipt** (*boleta*) with the next sequential number. All in one database transaction.
-- The plan label shown is `"N mes"` / `"N meses"`.
+- The duration label shown is `"N mes"` / `"N meses"`.
 - **Access scope** of a membership: `branch` (only the home branch; the default) or `gym` (the
   branches of the gym). The former `network` scope (every branch of the organization) **no longer
   exists**; a request with `network` is `400 VALIDATION_FAILED`, and old `network` periods were converted
@@ -134,15 +135,50 @@ The gym's identity (name, colour, logo) and its branches are configured by Atmó
   time).
 - When the gym has a single branch the web hides the access choice.
 
+## 7b. Plans and optional modules  (plan 08)
+
+- A gym sells **membership plans** (e.g. *Baile*, *Todo el gym*), each with a price per duration (1 to 24 months). Prices are only suggestions: the
+  final amount can always be typed. Names are unique per gym. Plans are deactivated, never deleted; each period keeps the plan id and the
+  plan's name at the time of sale (receipts never change).
+- A member **may hold several current periods at once**, one per plan. A plan **does not restrict access** (yet): the entry is allowed when any
+  current period, of any plan, opens the branch.
+- With exactly **one active plan** the sale does not ask for a plan (the API uses it; a gym with none gets "Membresía"). With several, `plan_id`
+  is required. Only the gym's admin manages plans; reception reads the active ones.
+- **Modules** (`sales`, `body_tracking`, `kiosk`) are switched per gym by the platform superadmin from console-web; the list is closed in
+  code. A route of a module the gym lacks answers `403 FEATURE_DISABLED`; the web hides its pages. Not every gym wants everything.
+
+## 7c. Same-plan purchases, overlap and corrections  (module `members`)
+
+- **Renewal, not a new membership.** If the member already holds a current or scheduled period of a plan, buying that plan again is a
+  *renewal*: it begins on the **end date of the member's last period of that plan** (the server computes it when `starts_on` is omitted).
+  Different plans live side by side (Baile + Todo el gym).
+- **Periods are half-open `[starts_on, ends_on)`** for overlap purposes: starting on the previous `ends_on` is the renewal and is allowed;
+  starting one day earlier overlaps. A period of a plan may never overlap another period of **the same plan** of the same member
+  (`409 MEMBERSHIP_OVERLAP` with `details { membership_id, starts_on, ends_on, suggested_starts_on }`). Coverage still counts `ends_on` as a covered day (section 8).
+- **An explicit start before the end is rejected**, not silently moved: the staff must pick the suggested date (or a later one: a gap is allowed;
+  a past start is allowed only when it collides with nothing, e.g. recording an old sale). The check runs under the member's row lock, so two simultaneous
+  purchases cannot both pass. Idempotent retries (same `id`) return the original sale.
+- **Correcting a period** (`PATCH /members/{id}/memberships/{membership_id}`): months, start date, amount and payment method. Only periods that
+  have **not ended** (`ends_on >= today`, Lima) and whose new end is not in the past; the plan never changes; the end date is recalculated by the
+  server; the same overlap rule applies against the other periods of the plan. Admin and reception (reception needs access to the branch that collected the payment).
+- **What happens to the receipt (decision):** it is **corrected in place, never deleted or re-issued**. The receipt number and the payment row stay; the payment's
+  `amount` and `method` take the new values and the printable receipt reads the period live, so it shows the new plan duration and dates. Traceability: every
+  change inserts a row in `membership_amendments` (who, when, values before and after) and sets `memberships.amended_at` (`amended_at` in the API);
+  the history is `GET .../amendments` (admin). `paid_on` is not changed. Because the payment amount changes, membership income reports of that day change
+  too; the history keeps the old value. A change that alters nothing writes nothing.
+
 ## 8. Member status  (`features/members/services/memberData.ts`)
 
 "Today" is the **current date in `America/Lima`** (the prototype uses a fixed demo date; do not copy
 that). Given the periods of a member:
 
-- `active`: some period contains today. If it ends in **7 days or fewer** (counting from today to the
-  end of the latest period) the status is `expiring`.
-- not active: `scheduled` if some period starts after today, otherwise `expired`.
-- `days_remaining` = days from today to the latest end date (negative when expired).
+Periods of **all plans** count together. A period is *current* when `starts_on <= today <= ends_on` (both inclusive).
+
+- Covered = some period of any plan is current. The **coverage end** starts at the latest end among the current periods and is extended by
+  any period that begins on or before the day after it (a renewal queued behind, or another plan that continues it), repeatedly.
+  `expiring` if the coverage end is **7 days or fewer** away, otherwise `active`; `days_remaining` = coverage end - today.
+  (A member with *Baile* ending in 3 days and *Todo el gym* ending in 60 is `active` with 60 days; with a gap before the next period they are `expiring`.)
+- Not covered: `scheduled` if some period starts after today, otherwise `expired`; `days_remaining` = days to the latest end of any period (negative when past).
 - The server computes `status` and `days_remaining`; the web never recalculates them.
 - Counts shown on the members screen: all, active (**only** `active`, not `expiring`), expiring,
   expired, scheduled. The dashboard's "Vigentes" is `active + expiring`.
@@ -183,17 +219,62 @@ allowed or denied. The decision is made **on the server** for a `branch_id` the 
 2. The membership does not open that branch (scope list, `branch_sharing`) → `BRANCH_NOT_ALLOWED`.
 3. No period contains today: some period starts later → `MEMBERSHIP_NOT_STARTED`; otherwise
    `MEMBERSHIP_EXPIRED` (with the end date).
-4. Otherwise `MEMBERSHIP_VALID` (with the end date of the current period).
+4. Otherwise `MEMBERSHIP_VALID`. With several plans, steps 2 and 4 look at **any** current period that opens the branch; the end date shown (and the
+   7-day warning) is the coverage end (section 8) of the periods that open that branch.
 
 Every check, allowed or not, is **logged** as an access entry (who, branch, time, result, reason
 code). The web shows the last entries of the branch. Reason texts are Spanish and live in the web.
+
+## 11b. Kiosk mode  (module `kiosk`; `features/kiosk`, `internal/modules/kiosk`)
+
+A tablet at the door where the member types a document and enters, unsupervised. Only for gyms with the `kiosk` module
+(superadmin switch); every route answers `403 FEATURE_DISABLED` without it.
+
+- It is the web route `/kiosk`, full screen, no sidebar. It runs with the session of a **receptionist pinned to one branch**
+  (an admin works too) and uses the normal `POST /access/checks`, so every attempt is logged exactly like reception's.
+  With several branches the kiosk asks for the branch **once** and remembers it in that device (`localStorage`).
+- The screen shows only the **first name** and the status (days left if allowed; a plain Spanish reason if denied:
+  not registered, expired, not started yet, branch not allowed). Never the document, phone, amount or history. The typed
+  document is masked (all digits but the last) and is dropped from the screen state as soon as the answer arrives.
+  The answer clears after 5 s; a half-typed document after 20 s of idle.
+- No connection, API error or rate limit (429, per IP) shows a clear notice and **never** an "allowed" state; a request
+  that takes over 12 s counts as lost connection. One check at a time (no double send).
+- **Exit PIN**: holding the logo 3 s asks for a PIN (4 to 8 digits) set by the **admin** (page "Quiosco"). Stored as a bcrypt
+  hash per gym in `kiosk_settings` and checked by the API (`POST /kiosk/exit`); 5 wrong PINs lock that user for 5 minutes.
+  Why not in the device: the admin sets it once for every tablet, a hash in the browser could be read or replaced by whoever
+  uses the tablet, and the API can throttle. The kiosk refuses to start until a PIN exists.
+- Limits of a web kiosk: leaving it is only protected inside the app; locking the tablet itself (Android screen pinning, iPad
+  Guided Access) is a device setting. Wake Lock and fullscreen are requested when the browser has them (Wake Lock needs https).
+- Phase 2 (pending): registered devices with their own credential instead of a shared receptionist session.
+
+## 11c. Sales of products  (module `sales`; `internal/modules/sales`)
+
+Optional module (`sales`), switched per gym by the superadmin. Every route is behind `auth.RequireFeature(sales)` (`403 FEATURE_DISABLED`); the web hides the pages.
+It is **a count of units sold and of what members still have to pay**, not accounting: **no receipts or R-/D- series, no invoices, no tax, no inventory/stock**.
+
+- **Catalog**: per gym, `name` (1-60, unique ignoring case), `price` (0.01 to 10000.00), `is_active`, `position`. Only the admin manages it (screen "Productos"). Products are never deleted, only deactivated.
+- **A sale** is a normal sale of one or more products: items (product, quantity 1-99, at most 30 different products, total at most 100000.00), branch (must be reachable by the user),
+  who registered it, Lima date, and an **optional member** of the same gym. The unit price is **read from the catalog by the server** and kept on the sale with the product name (a photo: old sales never change).
+  Repeated products in one request are merged. Idempotent by the client's `id`.
+- **Status**: `paid` (collected at the moment, with `method`: `cash`, `yape_plin`, `card`, `transfer`) or `pending` (not collected yet: **requires the member**; no method yet).
+  `was_pending` stays true after a pending sale is collected, so history shows it started pending.
+- **Pending balance of a member** = sum of their `pending` sales. It is the gym's (shared by all branches, like the directory). Any admin or receptionist with access can open the
+  member's file, see the pending sales (products, quantities, dates, total) and collect them.
+- **Collect** (decision): a collection pays **whole sales**. The user picks some pending sales of one member or none (= all of them), the payment method and the collecting branch; one `sale_collections`
+  row records amount, method and who collected it, and the sales become `paid` (`was_pending = true`, pointing to the collection). There are no partial payments of one sale: it is paid whole or not at all
+  (the simplest model that stays exactly consistent). Collecting is all-or-nothing, locks the sales, and two people collecting at once cannot collect twice (the second gets `409 NOTHING_TO_COLLECT` / `SALE_NOT_PENDING`). Idempotent by `id`.
+- **Purchase history** of a member: `GET /members/{id}/sales` (paid and pending, all branches).
+- **Roles**: admin and reception register sales and collect. Reception lists sales only of its branches; balances and a member's history are the gym's. Only the admin manages the catalog and reads the report.
+- **Report** (admin, `/sales/report`): units and money by product and by day/month, filtered by Lima dates and branch. `total_sold` (all sales), `collected_total` (paid, including pending sales collected since)
+  and `pending_total` (still pending). **Separate from membership income**: product sales never appear in `payments`, the CSV export or the dashboard (a test guards it).
+- Not included (open): voiding a wrong sale, limits on what a member can owe, stock.
 
 ## 12. Day pass (*pase del día*)  (`features/dayPasses`)
 
 - A one-time entry: no membership, no member row. Reception only confirms the payment method; **all
   customer data is optional** (document type and number, name, phone) and kept for future promotions.
 - The **price is fixed per gym** (`gyms.day_pass_price`); when the gym has none the default is **15.00**.
-  Only the gym's admin changes it (screen *Tarifas*). The sale uses the stored price; the
+  Only the gym's admin changes it (screen *Planes y tarifas*). The sale uses the stored price; the
   client cannot choose the amount.
 - A sale, in one transaction, creates: the day pass, a receipt `D-NNNNNN`, a payment (kind
   `day_pass`) and an **allowed access entry** (reason `DAY_PASS`). No ticket is printed.

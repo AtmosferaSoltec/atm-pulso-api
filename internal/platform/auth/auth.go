@@ -44,6 +44,8 @@ type Principal struct {
 	Role     Role
 	// BranchIDs are the branches a receptionist works in; empty for an admin.
 	BranchIDs []uuid.UUID
+	// Features are the optional modules the gym has switched on (see features.go), read on every request.
+	Features []Feature
 }
 
 // BranchRef identifies a branch and the gym it belongs to.

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports/app"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/memberstatus"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/receipts"
 )
 
@@ -53,7 +54,7 @@ func (r *Repository) Payments(ctx context.Context, gymID uuid.UUID, f app.Paymen
 	if err := r.pool.QueryRow(ctx, `SELECT count(*) `+paymentFrom, args(gymID, f)...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := r.pool.Query(ctx, `SELECT p.id, p.paid_on, r.id, r.kind, r.number, COALESCE(ms.months, 0), p.amount::text, p.method,
+	rows, err := r.pool.Query(ctx, `SELECT p.id, p.paid_on, r.id, r.kind, r.number, COALESCE(ms.months, 0), ms.plan_name, p.amount::text, p.method,
 			m.id, m.full_name, m.document_type, m.document_number, d.customer_name, b.id, b.name,
 			(SELECT count(*)::int FROM payment_vouchers v WHERE v.payment_id = p.id AND v.gym_id = p.gym_id) `+paymentFrom+
 		` ORDER BY p.paid_on DESC, p.created_at DESC, p.id DESC LIMIT $8 OFFSET $9`, append(args(gymID, f), f.Limit, f.Offset)...)
@@ -69,7 +70,7 @@ func (r *Repository) Payments(ctx context.Context, gymID uuid.UUID, f app.Paymen
 		var kind string
 		var memberID *uuid.UUID
 		var memberName *string
-		if err := rows.Scan(&row.ID, &paid, &row.Receipt.ID, &kind, &number, &months, &row.Amount, &row.Method,
+		if err := rows.Scan(&row.ID, &paid, &row.Receipt.ID, &kind, &number, &months, &row.PlanName, &row.Amount, &row.Method,
 			&memberID, &memberName, &row.DocumentType, &row.Document, &row.VisitorName, &row.Branch.ID, &row.Branch.Name, &row.VoucherCount); err != nil {
 			return nil, 0, err
 		}
@@ -118,14 +119,14 @@ func (r *Repository) Totals(ctx context.Context, gymID uuid.UUID, f app.PaymentF
 // Dashboard computes the figures of a set of branches for a Lima day and month.
 func (r *Repository) Dashboard(ctx context.Context, gymID uuid.UUID, branchIDs []uuid.UUID, today, monthStart time.Time) (app.DashboardView, error) {
 	v := app.DashboardView{Date: today.Format("2006-01-02"), ExpiringSoon: []app.ExpiringItem{}}
-	const base = `WITH base AS (
-		SELECT m.id, m.full_name, m.phone, s.latest_end,
-		       CASE WHEN COALESCE(s.active_now, false) THEN CASE WHEN s.latest_end - $3::date <= 7 THEN 'expiring' ELSE 'active' END
+	// The status follows the same coverage rule as the member list (platform/memberstatus).
+	base := memberstatus.Prefix("$1", "$3::date") + `, base AS (
+		SELECT m.id, m.full_name, m.phone, cv.end_on AS latest_end,
+		       CASE WHEN cv.end_on IS NOT NULL THEN CASE WHEN cv.end_on - $3::date <= 7 THEN 'expiring' ELSE 'active' END
 		            WHEN COALESCE(s.scheduled, false) THEN 'scheduled' ELSE 'expired' END AS status
 		FROM members m
-		LEFT JOIN LATERAL (SELECT max(ends_on) AS latest_end,
-				bool_or(starts_on <= $3::date AND ends_on >= $3::date) AS active_now, bool_or(starts_on > $3::date) AS scheduled
-			FROM memberships WHERE member_id = m.id) s ON true
+		LEFT JOIN coverage cv ON cv.member_id = m.id
+		LEFT JOIN LATERAL (SELECT bool_or(starts_on > $3::date) AS scheduled FROM memberships WHERE member_id = m.id) s ON true
 		WHERE m.gym_id = $1 AND m.home_branch_id = ANY($2))`
 	err := r.pool.QueryRow(ctx, base+` SELECT count(*) FILTER (WHERE status = 'active'), count(*) FILTER (WHERE status = 'expiring'),
 			count(*) FILTER (WHERE status = 'expired'), count(*) FILTER (WHERE status = 'scheduled') FROM base`, gymID, branchIDs, today).

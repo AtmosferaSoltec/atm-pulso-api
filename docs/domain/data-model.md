@@ -26,7 +26,7 @@ The **group** is not a tenant key: no business table references it, only `gyms.g
 ```
 groups        (id, name, created_at, updated_at)                           -- internal label chosen by the superadmin; not a user, no owner
 gyms          (id, group_id -> groups ON DELETE RESTRICT, name, display_name, tax_id, brand_color, day_pass_price,
-               branch_sharing, membership_prices, auth_tenant_id UNIQUE, auth_client_id, created_at, updated_at)
+               branch_sharing, features text[] (modules), auth_tenant_id UNIQUE, auth_client_id, created_at, updated_at)
                                                                 -- an auth Company with Pulso enabled; auth_client_id is its auth Client
 branches      (id, gym_id -> gyms, name, address, created_at, updated_at, UNIQUE (id, gym_id))
 users         (id, gym_id -> gyms, auth_user_id, document_number, full_name, phone, role, is_active, created_at, updated_at,
@@ -124,3 +124,42 @@ Proof of payment files attached to a payment: `id`, `organization_id`, `payment_
 `payments(id, organization_id)`, `ON DELETE CASCADE`), `storage_key` (private R2 object), `content_type`
 (png, jpeg, webp or pdf), `size_bytes`, `uploaded_by`, `created_at`. At most five per payment, never for
 cash, immutable. `payments` gets `UNIQUE (id, organization_id)` for that foreign key.
+
+
+## Plan 08 additions (migrations 00014 and 00015)
+
+```
+gyms                    + features text[] NOT NULL DEFAULT '{}'      -- optional modules; valid names closed in code (platform/auth/features.go)
+                        - membership_prices                          -- replaced by plans
+membership_plans        (id, gym_id -> gyms, name, description NULL, is_active, position, created_at, updated_at,
+                         UNIQUE (id, gym_id), UNIQUE (gym_id, lower(name)))
+membership_plan_prices  (plan_id, gym_id, months 1..24, amount, PRIMARY KEY (plan_id, months),
+                         FOREIGN KEY (plan_id, gym_id) -> membership_plans (id, gym_id) ON DELETE CASCADE)
+memberships             + plan_id, plan_name NOT NULL                -- FK (plan_id, gym_id) -> membership_plans; plan_name is a snapshot
+```
+
+Status is never stored: the coverage rule (business-rules section 8) lives in SQL in `internal/platform/memberstatus` and in
+Go in `members/domain.CoverageEnd`.
+
+## Plan 08, rules and sales (migrations 00017, 00018 and 00020)
+
+```
+memberships             + amended_at timestamptz NULL                -- last correction (PATCH of a period)
+membership_amendments   (id, gym_id, membership_id, payment_id NULL, changed_by -> users, changed_at, before jsonb, after jsonb,
+                         FOREIGN KEY (membership_id, gym_id) -> memberships ON DELETE CASCADE)   -- who corrected what; the receipt stays
+
+products                (id, gym_id, name, price numeric(14,2) 0 < p <= 10000, is_active, position, created_at, updated_at,
+                         UNIQUE (id, gym_id), UNIQUE (gym_id, lower(name)))
+sale_collections        (id, gym_id, member_id, branch_id, method, amount, collected_by -> users, collected_at, collected_on,
+                         FKs (member_id, gym_id) and (branch_id, gym_id); UNIQUE (id, gym_id))
+sales                   (id, gym_id, branch_id, sold_by -> users, member_id NULL, status 'paid'|'pending', was_pending, method NULL,
+                         total <= 100000, units, sold_at, sold_on (Lima date), collection_id NULL,
+                         FKs (branch_id|member_id|collection_id, gym_id); CHECK sales_shape keeps status/was_pending/method/collection coherent;
+                         partial index on (gym_id, member_id) WHERE status = 'pending')
+sale_items              (id, sale_id, gym_id, product_id, product_name (photo), quantity 1..99, unit_price (photo),
+                         FKs (sale_id, gym_id) ON DELETE CASCADE and (product_id, gym_id))
+gyms.features           00020 renames the module value 'products' -> 'sales'
+```
+
+The sales tables never touch `receipts`, `receipt_counters` or `payments`: product sales are outside the membership income. Their foreign keys are
+`DEFERRABLE INITIALLY DEFERRED` so deleting a gym (everything cascades from it) is checked after all the cascades ran.

@@ -3,6 +3,7 @@ package domain
 
 import (
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -70,19 +71,47 @@ func Decide(periods []Period, branchID, homeBranch uuid.UUID, homeGymSharing boo
 	if !homeGymSharing && branchID != homeBranch {
 		return Decision{Reason: ReasonBranch}
 	}
+	// A member may hold several periods at once (one per plan). Entry is allowed when ANY current period,
+	// of any plan, opens this branch: a plan does not restrict access by itself (plan 08).
+	var opening []Period
+	for _, p := range periods {
+		if slices.Contains(p.BranchIDs, branchID) {
+			opening = append(opening, p)
+		}
+	}
 	for _, p := range active {
-		for _, id := range p.BranchIDs {
-			if id == branchID {
-				end := latest
-				d := Decision{Allowed: true, Reason: ReasonValid, EndsOn: &end}
-				if days := int(latest.Sub(today).Hours() / 24); days <= ExpiringDays {
-					d.ExpiringInDays = &days
-				}
-				return d
+		if slices.Contains(p.BranchIDs, branchID) {
+			// The end shown is where access to this branch stops: the latest end among the current periods
+			// that open it, extended by any such period that continues it (same rule as the member status).
+			end := coverageEnd(opening, today)
+			d := Decision{Allowed: true, Reason: ReasonValid, EndsOn: &end}
+			if days := int(end.Sub(today).Hours() / 24); days <= ExpiringDays {
+				d.ExpiringInDays = &days
 			}
+			return d
 		}
 	}
 	return Decision{Reason: ReasonBranch}
+}
+
+// coverageEnd extends the latest end among the current periods with the periods that begin on or before
+// the day after it. At least one period must be current.
+func coverageEnd(periods []Period, today time.Time) time.Time {
+	var end time.Time
+	for _, p := range periods {
+		if !p.StartsOn.After(today) && !p.EndsOn.Before(today) && p.EndsOn.After(end) {
+			end = p.EndsOn
+		}
+	}
+	for extended := true; extended; {
+		extended = false
+		for _, p := range periods {
+			if !p.StartsOn.After(end.AddDate(0, 0, 1)) && p.EndsOn.After(end) {
+				end, extended = p.EndsOn, true
+			}
+		}
+	}
+	return end
 }
 
 var (

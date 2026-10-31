@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,9 +34,12 @@ type MemberView struct {
 	Status         string     `json:"status"`
 	DaysRemaining  int        `json:"days_remaining"`
 	PlanLabel      string     `json:"plan_label"`
-	StartsOn       string     `json:"starts_on"`
-	EndsOn         string     `json:"ends_on"`
-	LastReceipt    *string    `json:"last_receipt"`
+	// PlanNames are the plans the member holds today (one per current period); for a member with
+	// none current, the last plan they held; empty when they never had one.
+	PlanNames   []string `json:"plan_names"`
+	StartsOn    string   `json:"starts_on"`
+	EndsOn      string   `json:"ends_on"`
+	LastReceipt *string  `json:"last_receipt"`
 }
 
 // BranchName is a branch with the name of its gym.
@@ -84,7 +88,10 @@ type ReceiptRef struct {
 
 // MembershipView is one sold period.
 type MembershipView struct {
-	ID             uuid.UUID      `json:"id"`
+	ID uuid.UUID `json:"id"`
+	// PlanID is the plan sold; PlanName is its name when it was sold (a photo, for old receipts).
+	PlanID         uuid.UUID      `json:"plan_id"`
+	PlanName       string         `json:"plan_name"`
 	Months         int            `json:"months"`
 	PlanLabel      string         `json:"plan_label"`
 	StartsOn       string         `json:"starts_on"`
@@ -93,6 +100,8 @@ type MembershipView struct {
 	AccessScope    string         `json:"access_scope"`
 	AccessBranches []AccessBranch `json:"access_branches"`
 	Receipt        *ReceiptRef    `json:"receipt"`
+	// AmendedAt is when the period was last corrected (RFC 3339), null when never. See Amendments.
+	AmendedAt *string `json:"amended_at"`
 }
 
 // MemberDetail is a member with every period.
@@ -107,8 +116,10 @@ type ReceiptSummary struct {
 	Number    string    `json:"number"`
 	IssuedOn  string    `json:"issued_on"`
 	PlanLabel string    `json:"plan_label"`
-	Amount    string    `json:"amount"`
-	Method    string    `json:"method"`
+	// PlanName is the plan sold (null for a day pass).
+	PlanName *string `json:"plan_name"`
+	Amount   string  `json:"amount"`
+	Method   string  `json:"method"`
 }
 
 // ReceiptDetail is everything the printable receipt shows.
@@ -147,6 +158,7 @@ type ReceiptMember struct {
 
 // ReceiptMembership is the sold period on a receipt.
 type ReceiptMembership struct {
+	PlanName       string         `json:"plan_name"`
 	Months         int            `json:"months"`
 	PlanLabel      string         `json:"plan_label"`
 	StartsOn       string         `json:"starts_on"`
@@ -163,7 +175,10 @@ type Sale struct {
 
 // Period is a membership about to be stored.
 type Period struct {
-	ID        uuid.UUID
+	ID uuid.UUID
+	// PlanID and PlanName are filled by the repository once it resolves the plan inside the transaction.
+	PlanID    uuid.UUID
+	PlanName  string
 	Months    int
 	StartsOn  time.Time
 	EndsOn    time.Time
@@ -183,8 +198,10 @@ type Enrollment struct {
 	FullName       string
 	Phone          string
 	Period         Period
-	Method         string
-	Today          time.Time
+	// PlanID is the plan asked for; nil lets the repository pick the gym's only active plan.
+	PlanID *uuid.UUID
+	Method string
+	Today  time.Time
 }
 
 // Renewal is a new period for an existing member, collected at CollectedBranchID.
@@ -194,8 +211,10 @@ type Renewal struct {
 	MemberID          uuid.UUID
 	PeriodID          uuid.UUID
 	CollectedBranchID uuid.UUID
-	Method            string
-	Today             time.Time
+	// PlanID is the plan asked for; nil lets the repository pick the gym's only active plan.
+	PlanID *uuid.UUID
+	Method string
+	Today  time.Time
 }
 
 // PlanFunc decides the period of a renewal once the repository has locked the member.
@@ -207,6 +226,53 @@ type SaleIDs struct {
 	MembershipID uuid.UUID
 }
 
+// AmendInput is the body of PATCH /members/{id}/memberships/{membership_id}: every field is optional but at
+// least one is required. The end date is never sent: the server recalculates it.
+type AmendInput struct {
+	Months   *int    `json:"months"`
+	StartsOn *string `json:"starts_on"`
+	Amount   *string `json:"amount"`
+	Method   *string `json:"method"`
+}
+
+// CurrentPeriod is a stored period with the payment that sold it, as the repository found it (locked).
+type CurrentPeriod struct {
+	PlanID   uuid.UUID
+	Months   int
+	StartsOn time.Time
+	EndsOn   time.Time
+	Amount   string
+	// PaymentID, Method and PaymentBranchID are nil/empty for a period without a payment.
+	PaymentID       *uuid.UUID
+	Method          string
+	PaymentBranchID *uuid.UUID
+}
+
+// PeriodChange is the new state of a corrected period.
+type PeriodChange struct {
+	Months   int
+	StartsOn time.Time
+	EndsOn   time.Time
+	Amount   string
+	Method   string
+}
+
+// AmendFunc decides the correction once the repository has locked the member and read the period. It
+// returns domain errors (ended, forbidden branch, validation).
+type AmendFunc func(cur CurrentPeriod) (PeriodChange, error)
+
+// AmendmentView is one row of the history of a period: who corrected it, when, and the values before and after.
+type AmendmentView struct {
+	ID        uuid.UUID `json:"id"`
+	ChangedAt string    `json:"changed_at"`
+	ChangedBy struct {
+		ID       uuid.UUID `json:"id"`
+		FullName string    `json:"full_name"`
+	} `json:"changed_by"`
+	Before json.RawMessage `json:"before"`
+	After  json.RawMessage `json:"after"`
+}
+
 // Repository is the persistence port.
 type Repository interface {
 	List(ctx context.Context, gymID uuid.UUID, filter Filter, today time.Time) (ListResult, error)
@@ -216,6 +282,19 @@ type Repository interface {
 	// already enrolled (idempotent repeat). domain.DocumentTakenError when the document is used.
 	Enroll(ctx context.Context, e Enrollment) (ids SaleIDs, existed bool, err error)
 	Renew(ctx context.Context, r Renewal, plan PlanFunc) (ids SaleIDs, existed bool, err error)
+	// AmendMembership locks the member, reads the period and applies what decide returns, rechecking that it does not overlap
+	// another period of the same plan; it updates the payment of the receipt and records an amendment, all in one transaction.
+	// changed is false when decide returned the same values (nothing written). domain.ErrMembershipNotFound, *domain.OverlapError.
+	AmendMembership(ctx context.Context, gymID, actorID, memberID, membershipID uuid.UUID, decide AmendFunc) (changed bool, err error)
+	// Amendments lists the corrections of a period, oldest first.
+	Amendments(ctx context.Context, gymID, memberID, membershipID uuid.UUID) ([]AmendmentView, error)
 	MemberReceipts(ctx context.Context, gymID, memberID uuid.UUID) ([]ReceiptSummary, error)
 	Receipt(ctx context.Context, gymID, receiptID uuid.UUID) (ReceiptDetail, error)
+
+	// Plans lists the gym's membership plans with their prices (only the active ones when activeOnly).
+	Plans(ctx context.Context, gymID uuid.UUID, activeOnly bool) ([]Plan, error)
+	// CreatePlan returns domain.ErrPlanNameTaken or domain.ErrConflict (the id belongs to something else).
+	CreatePlan(ctx context.Context, gymID uuid.UUID, plan Plan) (Plan, error)
+	// UpdatePlan returns domain.ErrPlanNotFound or domain.ErrPlanNameTaken.
+	UpdatePlan(ctx context.Context, gymID, planID uuid.UUID, changes PlanChanges) (Plan, error)
 }

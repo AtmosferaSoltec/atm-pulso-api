@@ -58,11 +58,13 @@ type PaymentFilter struct {
 
 // PaymentRow is one payment with its receipt.
 type PaymentRow struct {
-	ID          uuid.UUID  `json:"id"`
-	PaidOn      string     `json:"paid_on"`
-	Receipt     ReceiptRef `json:"receipt"`
-	Kind        string     `json:"kind"`
-	PlanLabel   string     `json:"plan_label"`
+	ID        uuid.UUID  `json:"id"`
+	PaidOn    string     `json:"paid_on"`
+	Receipt   ReceiptRef `json:"receipt"`
+	Kind      string     `json:"kind"`
+	PlanLabel string     `json:"plan_label"`
+	// PlanName is the membership plan sold; null for a day pass.
+	PlanName    *string    `json:"plan_name"`
 	Amount      string     `json:"amount"`
 	Method      string     `json:"method"`
 	Member      *MemberRef `json:"member"`

@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func day(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 0, 0, 0, 0, time.UTC) }
@@ -48,3 +49,33 @@ func TestDecide(t *testing.T) {
 }
 
 func ptr(n int) *int { return &n }
+
+// A member with several current periods (one per plan): any of them that opens the branch lets them in.
+func TestDecideSeveralPlans(t *testing.T) {
+	today := day(2026, 10, 27)
+	a, b := uuid.New(), uuid.New()
+	baile := Period{StartsOn: day(2026, 10, 1), EndsOn: day(2026, 10, 30), BranchIDs: []uuid.UUID{a}}
+	todo := Period{StartsOn: day(2026, 10, 1), EndsOn: day(2027, 1, 1), BranchIDs: []uuid.UUID{a, b}}
+
+	d := Decide([]Period{baile, todo}, b, a, true, today)
+	assert.True(t, d.Allowed, "the plan that opens branch B lets them in")
+	assert.Equal(t, todo.EndsOn, *d.EndsOn)
+	assert.Nil(t, d.ExpiringInDays)
+
+	d = Decide([]Period{baile, todo}, a, a, true, today)
+	assert.True(t, d.Allowed)
+	assert.Equal(t, todo.EndsOn, *d.EndsOn, "the later end among the plans that open the branch")
+
+	d = Decide([]Period{baile, {StartsOn: day(2026, 8, 1), EndsOn: day(2026, 9, 1), BranchIDs: []uuid.UUID{a, b}}}, b, a, true, today)
+	assert.False(t, d.Allowed, "the only current plan does not open branch B, the expired one does not count")
+	assert.Equal(t, ReasonBranch, d.Reason)
+
+	d = Decide([]Period{baile, {StartsOn: day(2026, 10, 30), EndsOn: day(2026, 12, 30), BranchIDs: []uuid.UUID{a}}}, a, a, true, today)
+	assert.True(t, d.Allowed)
+	assert.Equal(t, day(2026, 12, 30), *d.EndsOn, "a queued period continues the access")
+	assert.Nil(t, d.ExpiringInDays)
+
+	d = Decide([]Period{baile}, a, a, true, today)
+	require.NotNil(t, d.ExpiringInDays)
+	assert.Equal(t, 3, *d.ExpiringInDays)
+}

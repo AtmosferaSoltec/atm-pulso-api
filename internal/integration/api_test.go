@@ -26,9 +26,12 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/integrations/storageapi"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/access"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/accounts"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/bodytracking"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/documents"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/kiosk"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/sales"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers"
 	vouchersdomain "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers/domain"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
@@ -83,6 +86,9 @@ func newHarness(t *testing.T) harness {
 	members.New(members.Deps{Pool: pool, Clock: clock.System{}, Logos: logos}).Routes(protected)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
 	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected)
+	kiosk.New(kiosk.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	sales.New(sales.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	bodytracking.New(bodytracking.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
 	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, middleware.NewRateLimiter(100_000).Middleware())
 	return harness{router: router, pool: pool, vouchers: voucherStore, auth: authFake, storage: storageFake, people: &sync.Map{}, tokens: tokens}
 }
