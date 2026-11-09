@@ -57,7 +57,8 @@ func (s *Service) Resolve(ctx context.Context, claims auth.Claims) (auth.Princip
 	tenantID, errTenant := uuid.Parse(claims.Tenant)
 	clientID, errClient := uuid.Parse(claims.Client)
 	role := domain.Role(claims.AppRole)
-	if errUser != nil || errTenant != nil || errClient != nil || !role.Valid() || !domain.ValidDocumentNumber(claims.DNI) {
+	documentType, documentNumber, documentOK := domain.NormalizeDocument(claims.Document())
+	if errUser != nil || errTenant != nil || errClient != nil || !role.Valid() || !documentOK {
 		return auth.Principal{}, auth.ErrNoAccess
 	}
 
@@ -71,7 +72,7 @@ func (s *Service) Resolve(ctx context.Context, claims auth.Claims) (auth.Princip
 
 	user, err := s.Users.EnsureUser(ctx, UserInput{
 		GymID: tenancy.GymID, AuthUserID: authUser,
-		DocumentNumber: claims.DNI, FullName: claims.Name, Role: role,
+		DocumentType: documentType, DocumentNumber: documentNumber, FullName: claims.Name, Role: role,
 	})
 	if err != nil {
 		return auth.Principal{}, fmt.Errorf("ensure user: %w", err)

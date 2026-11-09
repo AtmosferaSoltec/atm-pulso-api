@@ -45,6 +45,7 @@ type TenancyRepository interface {
 type UserInput struct {
 	GymID          uuid.UUID
 	AuthUserID     uuid.UUID
+	DocumentType   domain.DocumentType
 	DocumentNumber string
 	FullName       string
 	Role           domain.Role
@@ -98,6 +99,7 @@ type DirectoryTenant struct {
 // DirectoryMember is a person with access to a company in Pulso.
 type DirectoryMember struct {
 	UserID         string
+	DocumentType   string
 	DocumentNumber string
 	FullName       string
 	Role           string
@@ -106,6 +108,7 @@ type DirectoryMember struct {
 
 // NewDirectoryMember is a person to add to a company.
 type NewDirectoryMember struct {
+	DocumentType   domain.DocumentType
 	DocumentNumber string
 	FullName       string
 	Role           string

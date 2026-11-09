@@ -1680,10 +1680,11 @@ components:
               accessible: { type: boolean }
     TeamUser:
       type: object
-      required: [id, full_name, document_number, phone, role, is_active, is_self, branches]
+      required: [id, full_name, document_type, document_number, phone, role, is_active, is_self, branches]
       properties:
         id: { type: string, format: uuid }
         full_name: { type: string }
+        document_type: { type: string, enum: [dni, ce, passport] }
         document_number: { type: string }
         phone: { type: [string, "null"] }
         role: { type: string, enum: [admin, receptionist] }
@@ -1703,7 +1704,12 @@ components:
       required: [full_name, document_number, role]
       properties:
         full_name: { type: string, minLength: 3, maxLength: 120 }
-        document_number: { type: string, pattern: "^[0-9]{8}$" }
+        document_type: { type: string, enum: [dni, ce, passport], default: dni }
+        document_number:
+          type: string
+          description: >-
+            DNI 8 digits; CE 9 to 12 digits; passport (or another foreign ID) 6 to 12 letters or digits.
+            Spaces and dashes are removed and letters upper-cased. It is the person's first password in atm-auth-api.
         role: { type: string, enum: [admin, receptionist] }
         branch_ids:
           type: array
@@ -2290,9 +2296,10 @@ components:
               phone: { type: string }
     User:
       type: object
-      required: [id, document_number, full_name, phone, role, gym, branches]
+      required: [id, document_type, document_number, full_name, phone, role, gym, branches]
       properties:
         id: { type: string, format: uuid }
+        document_type: { type: string, enum: [dni, ce, passport] }
         document_number: { type: string, example: "10000002" }
         full_name: { type: string }
         phone: { type: [string, "null"] }

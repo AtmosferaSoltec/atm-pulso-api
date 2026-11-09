@@ -13,14 +13,15 @@ import (
 
 // TeamUser is a person of the gym's team as the web sees them.
 type TeamUser struct {
-	ID             uuid.UUID    `json:"id"`
-	FullName       string       `json:"full_name"`
-	DocumentNumber string       `json:"document_number"`
-	Phone          *string      `json:"phone"`
-	Role           domain.Role  `json:"role"`
-	IsActive       bool         `json:"is_active"`
-	IsSelf         bool         `json:"is_self"`
-	Branches       []TeamBranch `json:"branches"`
+	ID             uuid.UUID           `json:"id"`
+	FullName       string              `json:"full_name"`
+	DocumentType   domain.DocumentType `json:"document_type"`
+	DocumentNumber string              `json:"document_number"`
+	Phone          *string             `json:"phone"`
+	Role           domain.Role         `json:"role"`
+	IsActive       bool                `json:"is_active"`
+	IsSelf         bool                `json:"is_self"`
+	Branches       []TeamBranch        `json:"branches"`
 }
 
 type TeamBranch struct {
@@ -29,16 +30,18 @@ type TeamBranch struct {
 	GymID uuid.UUID `json:"gym_id"`
 }
 
-// NewUser is a person to add to the team. The account itself lives in atm-auth-api: the DNI is
-// their first password there and they must change it at their first login.
+// NewUser is a person to add to the team. The account itself lives in atm-auth-api: the document number
+// is their first password there and they must change it at their first login.
 type NewUser struct {
-	FullName       string      `json:"full_name"`
+	FullName string `json:"full_name"`
+	// DocumentType is "dni", "ce" or "passport"; empty is "dni".
+	DocumentType   string      `json:"document_type"`
 	DocumentNumber string      `json:"document_number"`
 	Role           domain.Role `json:"role"`
 	BranchIDs      []uuid.UUID `json:"branch_ids"`
 }
 
-// UserChanges edits a team member. The DNI cannot change: it is their identity in atm-auth-api.
+// UserChanges edits a team member. The document cannot change: it is their identity in atm-auth-api.
 type UserChanges struct {
 	FullName  *string      `json:"full_name"`
 	Role      *domain.Role `json:"role"`
@@ -82,7 +85,7 @@ func (s *Service) teamView(user ManagedUser, self uuid.UUID, active bool) TeamUs
 	if branches == nil {
 		branches = []TeamBranch{}
 	}
-	return TeamUser{ID: user.ID, FullName: user.FullName, DocumentNumber: user.DocumentNumber, Phone: phone,
+	return TeamUser{ID: user.ID, FullName: user.FullName, DocumentType: user.DocumentType, DocumentNumber: user.DocumentNumber, Phone: phone,
 		Role: user.Role, IsActive: active, IsSelf: user.ID == self, Branches: branches}
 }
 
@@ -108,13 +111,14 @@ func (s *Service) ListUsers(ctx context.Context, p auth.Principal, page, size in
 	for _, member := range members {
 		authUser, parseErr := uuid.Parse(member.UserID)
 		role := domain.Role(member.Role)
-		if parseErr != nil || !role.Valid() || !domain.ValidDocumentNumber(member.DocumentNumber) {
+		documentType, documentNumber, documentOK := domain.NormalizeDocument(member.DocumentType, member.DocumentNumber)
+		if parseErr != nil || !role.Valid() || !documentOK {
 			continue
 		}
 		authActive[authUser] = member.Active
 		if _, err := s.Team.SaveTeamUser(ctx, TeamSave{UserInput: UserInput{
 			GymID: p.GymID, AuthUserID: authUser,
-			DocumentNumber: member.DocumentNumber, FullName: member.FullName, Role: role,
+			DocumentType: documentType, DocumentNumber: documentNumber, FullName: member.FullName, Role: role,
 		}, KeepProfile: true}); err != nil {
 			return nil, 0, err
 		}
@@ -170,7 +174,8 @@ func (s *Service) CreateUser(ctx context.Context, p auth.Principal, input NewUse
 	if !input.Role.Valid() {
 		return TeamUser{}, domain.ErrRoleNotAssignable
 	}
-	if !domain.ValidDocumentNumber(input.DocumentNumber) {
+	documentType, documentNumber, documentOK := domain.NormalizeDocument(input.DocumentType, input.DocumentNumber)
+	if !documentOK {
 		return TeamUser{}, fieldError("document_number", "DOCUMENT_NUMBER_INVALID")
 	}
 	name, _, err := domain.ProfileChanges(input.FullName, "")
@@ -182,7 +187,7 @@ func (s *Service) CreateUser(ctx context.Context, p auth.Principal, input NewUse
 		return TeamUser{}, err
 	}
 	member, err := s.Directory.AddMember(ctx, p.TenantID.String(), NewDirectoryMember{
-		DocumentNumber: input.DocumentNumber, FullName: name, Role: string(input.Role),
+		DocumentType: documentType, DocumentNumber: documentNumber, FullName: name, Role: string(input.Role),
 	})
 	if err != nil {
 		return TeamUser{}, err
@@ -193,7 +198,7 @@ func (s *Service) CreateUser(ctx context.Context, p auth.Principal, input NewUse
 	}
 	saved, err := s.Team.SaveTeamUser(ctx, TeamSave{
 		UserInput: UserInput{GymID: p.GymID, AuthUserID: authUser,
-			DocumentNumber: input.DocumentNumber, FullName: name, Role: input.Role},
+			DocumentType: documentType, DocumentNumber: documentNumber, FullName: name, Role: input.Role},
 		Branches: branches, ReplaceBranches: true,
 	})
 	if err != nil {

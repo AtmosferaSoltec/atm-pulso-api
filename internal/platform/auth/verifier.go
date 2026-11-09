@@ -18,7 +18,7 @@ import (
 )
 
 // Claims are what atm-auth-api puts in an access token (see its internal/platform/token.go).
-// Name, DNI and TenantRUC only identify the person and the company; authorization reads
+// Name, the document and TenantRUC only identify the person and the company; authorization reads
 // Role, System, Tenant and AppRole.
 type Claims struct {
 	jwt.RegisteredClaims
@@ -31,8 +31,21 @@ type Claims struct {
 	AppRole     string `json:"app_role"`
 	ManageUsers bool   `json:"manage_users"`
 	Name        string `json:"name"`
-	DNI         string `json:"dni"`
-	TenantRUC   string `json:"tenant_ruc"`
+	// DocumentType is "dni", "ce" or "passport", and DocumentNumber its number.
+	DocumentType   string `json:"document_type"`
+	DocumentNumber string `json:"document_number"`
+	// DNI is the same number in tokens issued before foreign documents existed. Deprecated: read Document().
+	DNI       string `json:"dni"`
+	TenantRUC string `json:"tenant_ruc"`
+}
+
+// Document returns the type and number of the person's identity document. Tokens issued before foreign
+// documents existed only carry `dni`, which is then a DNI.
+func (c Claims) Document() (documentType, number string) {
+	if c.DocumentNumber != "" {
+		return c.DocumentType, c.DocumentNumber
+	}
+	return "", c.DNI
 }
 
 // The values of Claims.Role.

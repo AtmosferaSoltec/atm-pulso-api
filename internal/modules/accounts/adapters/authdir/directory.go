@@ -44,7 +44,7 @@ func translate(err error) error {
 			return domain.ErrRoleNotAssignable
 		case "member_not_found":
 			return domain.ErrResourceNotFound
-		case "invalid_dni":
+		case "invalid_document", "invalid_dni":
 			return &domain.ValidationError{Issues: []domain.Issue{{Field: "document_number", Code: domain.CodeDocumentNumberInvalid}}}
 		case "invalid_full_name":
 			return &domain.ValidationError{Issues: []domain.Issue{{Field: "full_name", Code: domain.CodeFullNameInvalid}}}
@@ -64,7 +64,8 @@ func toTenant(t authapi.Tenant) app.DirectoryTenant {
 }
 
 func toMember(m authapi.Member) app.DirectoryMember {
-	return app.DirectoryMember{UserID: m.UserID, DocumentNumber: m.DNI, FullName: m.FullName, Role: m.Role, Active: m.Status == "" || m.Status == "active"}
+	documentType, documentNumber := m.Document()
+	return app.DirectoryMember{UserID: m.UserID, DocumentType: documentType, DocumentNumber: documentNumber, FullName: m.FullName, Role: m.Role, Active: m.Status == "" || m.Status == "active"}
 }
 
 // Tenants implements app.Directory.
@@ -116,7 +117,9 @@ func (d *Directory) AddMember(ctx context.Context, tenantID string, in app.NewDi
 	if err := d.ready(); err != nil {
 		return app.DirectoryMember{}, err
 	}
-	item, err := d.client.AddMember(ctx, tenantID, authapi.NewMember{DNI: in.DocumentNumber, FullName: in.FullName, Role: in.Role})
+	item, err := d.client.AddMember(ctx, tenantID, authapi.NewMember{
+		DocumentType: string(in.DocumentType), DocumentNumber: in.DocumentNumber, FullName: in.FullName, Role: in.Role,
+	})
 	if err != nil {
 		return app.DirectoryMember{}, translate(err)
 	}

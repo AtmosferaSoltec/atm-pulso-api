@@ -43,19 +43,31 @@ func (t Tenant) Name() string {
 
 // Member is a person with access to a company in Pulso.
 type Member struct {
-	UserID      string `json:"user_id"`
-	DNI         string `json:"dni"`
-	FullName    string `json:"full_name"`
-	Role        string `json:"role"`
-	ManageUsers bool   `json:"manage_users"`
-	Status      string `json:"status"`
+	UserID string `json:"user_id"`
+	// DocumentType is "dni", "ce" or "passport". Older versions of atm-auth-api only answer DNI.
+	DocumentType   string `json:"document_type"`
+	DocumentNumber string `json:"document_number"`
+	DNI            string `json:"dni"`
+	FullName       string `json:"full_name"`
+	Role           string `json:"role"`
+	ManageUsers    bool   `json:"manage_users"`
+	Status         string `json:"status"`
 }
 
-// NewMember is a person to add to a company. If the DNI already has an account only the access is added.
+// Document returns the type and number of the member's document, also from an older atm-auth-api.
+func (m Member) Document() (documentType, number string) {
+	if m.DocumentNumber != "" {
+		return m.DocumentType, m.DocumentNumber
+	}
+	return "dni", m.DNI
+}
+
+// NewMember is a person to add to a company. If the document already has an account only the access is added.
 type NewMember struct {
-	DNI      string `json:"dni"`
-	FullName string `json:"full_name"`
-	Role     string `json:"role"`
+	DocumentType   string `json:"document_type"`
+	DocumentNumber string `json:"document_number"`
+	FullName       string `json:"full_name"`
+	Role           string `json:"role"`
 }
 
 // Client is what Pulso needs from atm-auth-api.

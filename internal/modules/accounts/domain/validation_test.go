@@ -7,10 +7,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestValidDocumentNumber(t *testing.T) {
-	assert.True(t, ValidDocumentNumber("12345678"))
-	for _, bad := range []string{"", "1234567", "123456789", "1234567a", " 12345678"} {
-		assert.False(t, ValidDocumentNumber(bad), bad)
+func TestNormalizeDocument(t *testing.T) {
+	for _, tc := range []struct {
+		documentType, number string
+		wantType             DocumentType
+		wantNumber           string
+	}{
+		{"", "12345678", DocumentDNI, "12345678"},
+		{"dni", " 12345678 ", DocumentDNI, "12345678"},
+		{"ce", "001234567", DocumentCE, "001234567"},
+		{"ce", "123456789012", DocumentCE, "123456789012"},
+		{"passport", "ab-123 456", DocumentPassport, "AB123456"},
+		{"PASSPORT", "123456", DocumentPassport, "123456"},
+	} {
+		gotType, gotNumber, ok := NormalizeDocument(tc.documentType, tc.number)
+		require.True(t, ok, tc.number)
+		assert.Equal(t, tc.wantType, gotType, tc.number)
+		assert.Equal(t, tc.wantNumber, gotNumber, tc.number)
+	}
+	for _, bad := range [][2]string{
+		{"", ""}, {"dni", "1234567"}, {"dni", "123456789"}, {"dni", "1234567a"}, {"ce", "12345678"},
+		{"ce", "1234567890123"}, {"ce", "A12345678"}, {"passport", "12345"}, {"passport", "ABCDEFGHIJ123"},
+		{"passport", "AB12345Ñ"}, {"rut", "123456789"},
+	} {
+		_, _, ok := NormalizeDocument(bad[0], bad[1])
+		assert.False(t, ok, "%v", bad)
 	}
 }
 

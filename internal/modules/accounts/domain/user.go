@@ -9,6 +9,7 @@ type User struct {
 	ID             uuid.UUID
 	GymID          uuid.UUID
 	AuthUserID     uuid.UUID
+	DocumentType   DocumentType
 	DocumentNumber string
 	FullName       string
 	// Phone is empty when the user did not give one.

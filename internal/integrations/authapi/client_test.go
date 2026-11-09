@@ -64,7 +64,7 @@ func TestHTTPClient(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 	assert.EqualValues(t, 1, tokenCalls.Load(), "the service token is cached")
 
-	_, err = client.AddMember(ctx, "t1", NewMember{DNI: "12345678", FullName: "Ana", Role: "admin"})
+	_, err = client.AddMember(ctx, "t1", NewMember{DocumentType: "dni", DocumentNumber: "12345678", FullName: "Ana", Role: "admin"})
 	var apiErr *Error
 	require.ErrorAs(t, err, &apiErr)
 	assert.Equal(t, "protected_member", apiErr.Code)

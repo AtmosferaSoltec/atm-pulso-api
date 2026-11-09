@@ -106,18 +106,18 @@ func (r *Repository) GymBranches(ctx context.Context, gymID uuid.UUID, branchIDs
 func (r *Repository) SaveTeamUser(ctx context.Context, in app.TeamSave) (app.ManagedUser, error) {
 	var id uuid.UUID
 	err := (tx.Runner{Pool: r.pool}).Run(ctx, func(t pgx.Tx) error {
-		query := `INSERT INTO users (id, gym_id, auth_user_id, document_number, full_name, role)
-			VALUES ($1, $2, $3, $4, $5, $6)
+		query := `INSERT INTO users (id, gym_id, auth_user_id, document_type, document_number, full_name, role)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (gym_id, auth_user_id) DO UPDATE SET full_name = EXCLUDED.full_name, role = EXCLUDED.role, updated_at = now()
 			RETURNING id`
 		if in.KeepProfile {
 			// Listing the team must not overwrite what the person edited about themselves.
-			query = `INSERT INTO users (id, gym_id, auth_user_id, document_number, full_name, role)
-			VALUES ($1, $2, $3, $4, $5, $6)
+			query = `INSERT INTO users (id, gym_id, auth_user_id, document_type, document_number, full_name, role)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (gym_id, auth_user_id) DO UPDATE SET role = EXCLUDED.role, updated_at = CASE WHEN users.role <> EXCLUDED.role THEN now() ELSE users.updated_at END
 			RETURNING id`
 		}
-		if err := t.QueryRow(ctx, query, ids.New(), in.GymID, in.AuthUserID, in.DocumentNumber, in.FullName, string(in.Role)).Scan(&id); err != nil {
+		if err := t.QueryRow(ctx, query, ids.New(), in.GymID, in.AuthUserID, documentTypeOf(in.UserInput), in.DocumentNumber, in.FullName, string(in.Role)).Scan(&id); err != nil {
 			return err
 		}
 		if in.Role == domain.RoleAdmin {

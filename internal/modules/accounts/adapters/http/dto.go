@@ -28,6 +28,7 @@ type branchDTO struct {
 
 type userDTO struct {
 	ID             string      `json:"id"`
+	DocumentType   string      `json:"document_type"`
 	DocumentNumber string      `json:"document_number"`
 	FullName       string      `json:"full_name"`
 	Phone          *string     `json:"phone"`
@@ -40,6 +41,7 @@ func toUserDTO(profile app.Profile, role auth.Role) userDTO {
 	user, scope := profile.User, profile.Scope
 	dto := userDTO{
 		ID:             user.ID.String(),
+		DocumentType:   string(user.DocumentType),
 		DocumentNumber: user.DocumentNumber,
 		FullName:       user.FullName,
 		Role:           string(role),

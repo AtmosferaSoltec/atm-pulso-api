@@ -113,15 +113,24 @@ func (r *Repository) EnsureTenancy(ctx context.Context, in app.TenancyInput) (ap
 	return tenancy, nil
 }
 
-const userColumns = `id, gym_id, auth_user_id, document_number, full_name, phone, role, is_active`
+const userColumns = `id, gym_id, auth_user_id, document_type, document_number, full_name, phone, role, is_active`
+
+// documentTypeOf is the type to store: callers that only know a number mean a DNI.
+func documentTypeOf(in app.UserInput) string {
+	if in.DocumentType == "" {
+		return string(domain.DocumentDNI)
+	}
+	return string(in.DocumentType)
+}
 
 func scanUser(row pgx.Row) (domain.User, error) {
 	var (
-		user  domain.User
-		phone *string
-		role  string
+		user         domain.User
+		phone        *string
+		role         string
+		documentType string
 	)
-	if err := row.Scan(&user.ID, &user.GymID, &user.AuthUserID, &user.DocumentNumber, &user.FullName, &phone, &role, &user.IsActive); err != nil {
+	if err := row.Scan(&user.ID, &user.GymID, &user.AuthUserID, &documentType, &user.DocumentNumber, &user.FullName, &phone, &role, &user.IsActive); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.User{}, domain.ErrUserNotFound
 		}
@@ -131,6 +140,7 @@ func scanUser(row pgx.Row) (domain.User, error) {
 		user.Phone = *phone
 	}
 	user.Role = domain.Role(role)
+	user.DocumentType = domain.DocumentType(documentType)
 	return user, nil
 }
 
@@ -139,10 +149,10 @@ func (r *Repository) EnsureUser(ctx context.Context, in app.UserInput) (domain.U
 	user, err := scanUser(r.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE gym_id = $1 AND auth_user_id = $2`, in.GymID, in.AuthUserID))
 	switch {
 	case errors.Is(err, domain.ErrUserNotFound):
-		user, err = scanUser(r.pool.QueryRow(ctx, `INSERT INTO users (id, gym_id, auth_user_id, document_number, full_name, role)
-			VALUES ($1, $2, $3, $4, $5, $6)
+		user, err = scanUser(r.pool.QueryRow(ctx, `INSERT INTO users (id, gym_id, auth_user_id, document_type, document_number, full_name, role)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (gym_id, auth_user_id) DO UPDATE SET role = EXCLUDED.role
-			RETURNING `+userColumns, ids.New(), in.GymID, in.AuthUserID, in.DocumentNumber, in.FullName, string(in.Role)))
+			RETURNING `+userColumns, ids.New(), in.GymID, in.AuthUserID, documentTypeOf(in), in.DocumentNumber, in.FullName, string(in.Role)))
 		return user, translateWrite(err)
 	case err != nil:
 		return domain.User{}, err

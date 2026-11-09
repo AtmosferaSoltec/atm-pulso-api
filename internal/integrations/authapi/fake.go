@@ -76,7 +76,7 @@ func (f *Fake) Members(_ context.Context, tenantID string) ([]Member, error) {
 	return append([]Member{}, f.members[tenantID]...), nil
 }
 
-// AddMember implements Client. The same DNI keeps the same user id in every company.
+// AddMember implements Client. The same document keeps the same user id in every company.
 func (f *Fake) AddMember(_ context.Context, tenantID string, in NewMember) (Member, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -84,12 +84,15 @@ func (f *Fake) AddMember(_ context.Context, tenantID string, in NewMember) (Memb
 		return Member{}, f.Err
 	}
 	for _, member := range f.members[tenantID] {
-		if member.DNI == in.DNI {
+		if member.DocumentNumber == in.DocumentNumber {
 			return member, nil
 		}
 	}
-	id := uuid.NewSHA1(uuid.NameSpaceDNS, []byte("dni:"+in.DNI)).String()
-	member := Member{UserID: id, DNI: in.DNI, FullName: in.FullName, Role: in.Role, Status: "active"}
+	id := uuid.NewSHA1(uuid.NameSpaceDNS, []byte("dni:"+in.DocumentNumber)).String()
+	member := Member{
+		UserID: id, DocumentType: in.DocumentType, DocumentNumber: in.DocumentNumber, DNI: in.DocumentNumber,
+		FullName: in.FullName, Role: in.Role, Status: "active",
+	}
 	f.members[tenantID] = append(f.members[tenantID], member)
 	return member, nil
 }
