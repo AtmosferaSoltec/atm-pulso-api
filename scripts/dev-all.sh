@@ -19,7 +19,9 @@
 # Logs y pids en /tmp/pulso-dev (se pueden borrar).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"   # .../Atmosfera
+PULSO="$ROOT/pulso"
+SERVICES="$ROOT/services"
 RUN=/tmp/pulso-dev
 mkdir -p "$RUN"
 
@@ -64,18 +66,18 @@ start_one() { # nombre puerto directorio comando...
 
 case "${1:-status}" in
 start)
-	start_one auth-api 3130 "$ROOT/atm-auth-api" \
+	start_one auth-api 3130 "$SERVICES/atm-auth-api" \
 		env HTTP_ADDR=:3130 CORS_ALLOWED_ORIGINS="$ORIGINS" go run ./cmd/api
-	start_one storage-api 8084 "$ROOT/atm-storage-api" go run ./cmd/api serve
-	start_one identity-api 8086 "$ROOT/atm-identity-api" env PORT=8086 go run ./cmd/server
+	start_one storage-api 8084 "$SERVICES/atm-storage-api" go run ./cmd/api serve
+	start_one identity-api 8086 "$SERVICES/atm-identity-api" env PORT=8086 go run ./cmd/server
 	# CORS_ORIGIN de .env solo se sustituye en modo LAN (dev.sh no pisa lo que ya está en el entorno).
 	if [ "${LAN:-}" = "1" ]; then
-		start_one pulso-api 3001 "$ROOT/atm-pulso-api" env CORS_ORIGIN="$ORIGINS" ./scripts/dev.sh
+		start_one pulso-api 3001 "$PULSO/atm-pulso-api" env CORS_ORIGIN="$ORIGINS" ./scripts/dev.sh
 	else
-		start_one pulso-api 3001 "$ROOT/atm-pulso-api" ./scripts/dev.sh
+		start_one pulso-api 3001 "$PULSO/atm-pulso-api" ./scripts/dev.sh
 	fi
-	start_one pulso-web 5173 "$ROOT/atm-pulso-web" env ${WEB_ENV[@]+"${WEB_ENV[@]}"} pnpm dev "${WEB_ARGS[@]}"
-	start_one console-web 5174 "$ROOT/atm-console-web" \
+	start_one pulso-web 5173 "$PULSO/atm-pulso-web" env ${WEB_ENV[@]+"${WEB_ENV[@]}"} pnpm dev "${WEB_ARGS[@]}"
+	start_one console-web 5174 "$SERVICES/atm-console-web" \
 		env AUTH_API_URL=http://localhost:3130 pnpm dev "${CONSOLE_ARGS[@]}"
 	if [ "${LAN:-}" = "1" ]; then
 		echo

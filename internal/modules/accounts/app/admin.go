@@ -31,7 +31,9 @@ type AdminGym struct {
 	Name       string  `json:"name"`
 	BrandColor string  `json:"brand_color"`
 	// Features are the optional modules the gym has switched on ("sales", "body_tracking", "kiosk").
-	Features []string      `json:"features"`
+	Features []string `json:"features"`
+	// Status is "active" or "suspended": a suspended gym cannot use Pulso.
+	Status   string        `json:"status"`
 	Branches []AdminBranch `json:"branches"`
 }
 
@@ -73,6 +75,8 @@ type AdminRepository interface {
 	// AddBranch returns domain.ErrResourceNotFound when the gym does not exist.
 	AddBranch(ctx context.Context, gymID uuid.UUID, name string, address *string) (AdminBranch, error)
 	UpdateBranch(ctx context.Context, id uuid.UUID, changes BranchChanges) (AdminBranch, error)
+	// UpdateGymStatus returns domain.ErrResourceNotFound when the gym does not exist.
+	UpdateGymStatus(ctx context.Context, gymID uuid.UUID, status string) (AdminGym, error)
 	// DeleteBranch returns domain.ErrBranchInUse when the branch has history or people, or is the last of its gym.
 	DeleteBranch(ctx context.Context, id uuid.UUID) error
 }
@@ -150,7 +154,7 @@ func (s *Service) ListGroups(ctx context.Context) ([]AdminGroup, error) {
 	groups, err := s.Admin.Groups(ctx)
 	for gi := range groups {
 		for yi := range groups[gi].Gyms {
-			groups[gi].Gyms[yi].Features = KnownFeatures(groups[gi].Gyms[yi].Features)
+			groups[gi].Gyms[yi].Features = OptionalFeatures(groups[gi].Gyms[yi].Features)
 		}
 	}
 	return groups, err
@@ -214,6 +218,21 @@ func (s *Service) UpdateGymFeatures(ctx context.Context, gymID uuid.UUID, names 
 		stored[i] = string(f)
 	}
 	return s.Admin.UpdateGymFeatures(ctx, gymID, stored)
+}
+
+// Gym statuses.
+const (
+	GymActive    = "active"
+	GymSuspended = "suspended"
+)
+
+// UpdateGymStatus suspends a gym (nobody of it may use Pulso; nothing is deleted) or reactivates it. Only the
+// superadmin does, from the console. It takes effect on the next request of each person.
+func (s *Service) UpdateGymStatus(ctx context.Context, gymID uuid.UUID, status string) (AdminGym, error) {
+	if status != GymActive && status != GymSuspended {
+		return AdminGym{}, fieldError("status", "STATUS_INVALID")
+	}
+	return s.Admin.UpdateGymStatus(ctx, gymID, status)
 }
 
 // AddBranch creates a branch in a gym. Only the superadmin does: Atmósfera charges per branch.

@@ -21,6 +21,10 @@ Business rules that shape the code:
   created, renamed and removed **only by the platform superadmin** from console-web (`/api/v1/admin`),
   because Atmósfera charges per branch. A gym's identity (name, RUC, colour, later the logo) is set from
   the console too. Gym admins never create gyms or branches. Anything commercial is handled outside the system.
+- **Modules.** The superadmin decides per gym which optional modules it uses (`PATCH /admin/gyms/{id}/features`);
+  base modules (today the kiosk) every gym has. The catalog is `GET /admin/modules`. A new module is a feature in
+  `internal/platform/auth/features.go` plus `RequireFeature` on its routes. The superadmin can also suspend a gym
+  (`403 GYM_SUSPENDED` for its people) without deleting anything.
 - The member directory is shared by the branches of a gym and never across gyms. Access between
   branches is a per-gym rule set by that gym's admin. Groups, gyms' grouping and branches are created only by the superadmin.
 - Only two roles exist, `admin` and `receptionist` (the `app_role` of the token). An admin creates every

@@ -18,6 +18,8 @@ type Tenancy struct {
 	GymID   uuid.UUID
 	// Features are the names of the optional modules the gym has switched on.
 	Features []string
+	// Suspended: the platform suspended the gym; nobody of it may use Pulso.
+	Suspended bool
 }
 
 // TenancyInput is what a token (or the company list of atm-auth-api) says about the

@@ -49,8 +49,8 @@ func translateWrite(err error) error {
 // FindTenancy finds the gym of a company and its group, checking the company belongs to the client of the token.
 func (r *Repository) FindTenancy(ctx context.Context, clientID, tenantID uuid.UUID) (app.Tenancy, error) {
 	var tenancy app.Tenancy
-	err := r.pool.QueryRow(ctx, `SELECT group_id, id, features FROM gyms WHERE auth_tenant_id = $1 AND auth_client_id = $2`,
-		tenantID, clientID).Scan(&tenancy.GroupID, &tenancy.GymID, &tenancy.Features)
+	err := r.pool.QueryRow(ctx, `SELECT group_id, id, features, status = 'suspended' FROM gyms WHERE auth_tenant_id = $1 AND auth_client_id = $2`,
+		tenantID, clientID).Scan(&tenancy.GroupID, &tenancy.GymID, &tenancy.Features, &tenancy.Suspended)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.Tenancy{}, domain.ErrResourceNotFound
 	}
@@ -82,7 +82,7 @@ func (r *Repository) EnsureTenancy(ctx context.Context, in app.TenancyInput) (ap
 			return err
 		}
 		var client uuid.UUID
-		if err := t.QueryRow(ctx, `SELECT id, group_id, auth_client_id, features FROM gyms WHERE auth_tenant_id = $1`, in.TenantID).Scan(&tenancy.GymID, &tenancy.GroupID, &client, &tenancy.Features); err != nil {
+		if err := t.QueryRow(ctx, `SELECT id, group_id, auth_client_id, features, status = 'suspended' FROM gyms WHERE auth_tenant_id = $1`, in.TenantID).Scan(&tenancy.GymID, &tenancy.GroupID, &client, &tenancy.Features, &tenancy.Suspended); err != nil {
 			return err
 		}
 		if client != in.ClientID {

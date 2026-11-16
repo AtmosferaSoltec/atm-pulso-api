@@ -8,29 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func (h harness) setKioskModule(t *testing.T, super string, gym string, on bool) {
-	t.Helper()
-	features := []string{}
-	if on {
-		features = []string{"kiosk"}
-	}
-	res := h.call(t, http.MethodPatch, "/admin/gyms/"+gym+"/features", super, map[string]any{"features": features})
-	require.Equal(t, 200, res.status, res.body)
-}
-
 func TestKioskExitPINIsGuardedHashedAndThrottled(t *testing.T) {
 	h := newHarness(t)
 	tn := h.newTenant(t)
-	super, admin, reception := h.superToken(t), h.token(t, tn.Admin), h.token(t, tn.Receptionist)
+	admin, reception := h.token(t, tn.Admin), h.token(t, tn.Receptionist)
 
-	// Module off: every route answers FEATURE_DISABLED.
-	for _, call := range []struct{ method, path string }{{http.MethodGet, "/kiosk/settings"}, {http.MethodPut, "/kiosk/pin"}, {http.MethodPost, "/kiosk/exit"}} {
-		res := h.call(t, call.method, call.path, admin, map[string]any{"pin": "1234"})
-		assert.Equal(t, 403, res.status, call.path)
-		assert.Equal(t, "FEATURE_DISABLED", res.errorCode(), call.path)
-	}
-
-	h.setKioskModule(t, super, tn.GymOne.String(), true)
+	// The kiosk is a base module: every gym has it, with no switch.
 	assert.Equal(t, 401, h.call(t, http.MethodGet, "/kiosk/settings", "", nil).status)
 
 	// No PIN yet.
@@ -60,7 +43,9 @@ func TestKioskExitPINIsGuardedHashedAndThrottled(t *testing.T) {
 	assert.NotContains(t, settings.body, "pin_hash")
 
 	// Another gym's PIN does not open this one.
-	assert.Equal(t, 403, h.call(t, http.MethodPost, "/kiosk/exit", h.token(t, tn.AdminTwo), map[string]any{"pin": "2468"}).status, "gym two has the module off")
+	otherGym := h.call(t, http.MethodPost, "/kiosk/exit", h.token(t, tn.AdminTwo), map[string]any{"pin": "2468"})
+	assert.Equal(t, 409, otherGym.status, "gym two has no PIN of its own yet")
+	assert.Equal(t, "KIOSK_PIN_NOT_SET", otherGym.errorCode())
 
 	// Right PIN exits; wrong PINs are counted and lock the user after five.
 	assert.Equal(t, 200, h.call(t, http.MethodPost, "/kiosk/exit", reception, map[string]any{"pin": "2468"}).status)

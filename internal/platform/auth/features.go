@@ -27,11 +27,18 @@ const (
 // AllFeatures is the closed list, in the order they are shown.
 var AllFeatures = []Feature{FeatureSales, FeatureBodyTracking, FeatureKiosk}
 
+// BaseFeatures are modules every gym has: they are never stored and cannot be switched off.
+var BaseFeatures = []Feature{FeatureKiosk}
+
+// IsBase says whether every gym has f.
+func (f Feature) IsBase() bool { return slices.Contains(BaseFeatures, f) }
+
 // Valid says whether f is one of the known modules.
 func (f Feature) Valid() bool { return slices.Contains(AllFeatures, f) }
 
-// NormalizeFeatures validates a list of module names and returns it without repeats, in the order of
-// AllFeatures. It reports false when any name is unknown.
+// NormalizeFeatures validates a list of module names and returns the optional ones without repeats, in the
+// order of AllFeatures (base modules are accepted and dropped: they are always on). It reports false when any
+// name is unknown.
 func NormalizeFeatures(raw []string) ([]Feature, bool) {
 	wanted := make(map[Feature]bool, len(raw))
 	for _, name := range raw {
@@ -43,7 +50,7 @@ func NormalizeFeatures(raw []string) ([]Feature, bool) {
 	}
 	out := make([]Feature, 0, len(wanted))
 	for _, f := range AllFeatures {
-		if wanted[f] {
+		if wanted[f] && !f.IsBase() {
 			out = append(out, f)
 		}
 	}

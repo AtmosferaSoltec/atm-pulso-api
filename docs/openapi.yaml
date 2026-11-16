@@ -22,8 +22,10 @@ info:
       from the console.
     - Errors of the guard: `UNAUTHORIZED` (401, missing/invalid/expired token), `NO_ACCESS` (403, the token
       does not open Pulso: other system, unknown role, no company), `USER_INACTIVE` (403, blocked in Pulso),
+      `GYM_SUSPENDED` (403, the platform suspended the person's gym),
       `FORBIDDEN` (403, wrong kind of token or role), `FEATURE_DISABLED` (403, the route belongs to an optional
-      module — `sales`, `body_tracking`, `kiosk` — that the gym has not switched on; see `Gym.features`).
+      module — `sales`, `body_tracking` — that the gym has not switched on; see `Gym.features`). The `kiosk` is a
+      base module: every gym has it.
 servers:
   - url: http://localhost:3001/api/v1
     description: local development
@@ -232,9 +234,9 @@ paths:
       tags: [admin]
       summary: Switch the optional modules of a gym on or off (superadmin).
       description: |
-        Sends the COMPLETE list of modules the gym should have; what is not listed is switched off. The list is closed:
-        `sales` (sales of products, paid now or pending collection, and the product catalog), `body_tracking` (measurements and routines), `kiosk` (access
-        tablet). An unknown name answers 400 `FEATURES_INVALID`. The gym sees the result in `GET /me` and `GET /catalog`
+        Sends the COMPLETE list of optional modules the gym should have; what is not listed is switched off. The list is closed:
+        `sales` (sales of products, paid now or pending collection, and the product catalog), `body_tracking` (measurements and routines).
+        `kiosk` (access tablet) is a base module: it is accepted and ignored, every gym has it. An unknown name answers 400 `FEATURES_INVALID`. The gym sees the result in `GET /me` and `GET /catalog`
         (`features`) at its next request. A route of a module the gym does not have answers 403 `FEATURE_DISABLED`.
       security: [{ bearer: [] }]
       parameters:
@@ -261,6 +263,60 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/Error" }
+  /admin/gyms/{gym_id}/status:
+    patch:
+      tags: [admin]
+      summary: Suspend or reactivate a gym (superadmin).
+      description: |
+        A suspended gym keeps all its data, but every request of its people answers 403 `GYM_SUSPENDED` until it is
+        reactivated. It takes effect at the next request. A status other than `active` or `suspended` answers 400 `STATUS_INVALID`.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [active, suspended] }
+      responses:
+        "200":
+          description: The gym.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/AdminGym" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/Error" }
+  /admin/modules:
+    get:
+      tags: [admin]
+      summary: The catalog of modules (superadmin).
+      description: |
+        What Pulso offers. `base` modules every gym has; `optional` ones the superadmin switches per gym with
+        `PATCH /admin/gyms/{gym_id}/features` (`switchable: true`). The console names each code; a code it does not know
+        is shown as is.
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: The modules, in the order to show them.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Module" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /admin/gyms/{gym_id}/branches:
     post:
       tags: [admin]
@@ -1741,9 +1797,9 @@ components:
         created_at: { type: string, format: date-time }
     Features:
       type: array
-      description: The optional modules a gym has switched on (closed list), in a fixed order. Only the platform superadmin changes them.
+      description: "The modules of a gym in a fixed order: the optional ones the platform superadmin switched on, plus the base ones (`kiosk`), which every gym has. When sent to the admin route, base modules are ignored."
       items: { type: string, enum: [sales, body_tracking, kiosk] }
-      example: [kiosk]
+      example: [sales, kiosk]
     MembershipPrice:
       type: object
       required: [months, amount]
@@ -2333,7 +2389,7 @@ components:
         address: { type: [string, "null"] }
     AdminGym:
       type: object
-      required: [id, group_id, auth_tenant_id, auth_client_id, ruc, name, brand_color, features, branches]
+      required: [id, group_id, auth_tenant_id, auth_client_id, ruc, name, brand_color, features, status, branches]
       properties:
         id: { type: string, format: uuid }
         group_id: { type: string, format: uuid }
@@ -2342,10 +2398,25 @@ components:
         ruc: { type: [string, "null"], description: Null when the company has none. }
         name: { type: string }
         brand_color: { type: string, pattern: '^#[0-9a-f]{6}$' }
-        features: { $ref: "#/components/schemas/Features" }
+        features:
+          type: array
+          description: The optional modules stored for the gym (base modules are never listed here).
+          items: { type: string, enum: [sales, body_tracking] }
+        status: { type: string, enum: [active, suspended], description: A suspended gym cannot use Pulso. }
         branches:
           type: array
           items: { $ref: "#/components/schemas/AdminBranch" }
+    Module:
+      type: object
+      required: [code, kind, switchable, requires]
+      properties:
+        code: { type: string, example: sales }
+        kind: { type: string, enum: [base, optional] }
+        switchable: { type: boolean, description: Whether the superadmin turns it on per gym. }
+        requires:
+          type: array
+          items: { type: string }
+          description: Codes that must be on first.
     AdminGroup:
       type: object
       description: An internal label that bundles related gyms. Not a user.
@@ -2480,7 +2551,7 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     Forbidden:
-      description: "`FORBIDDEN`, `NO_ACCESS` (the token does not open Pulso) or `USER_INACTIVE` (blocked in Pulso)."
+      description: "`FORBIDDEN`, `NO_ACCESS` (the token does not open Pulso), `USER_INACTIVE` (blocked in Pulso) or `GYM_SUSPENDED` (the platform suspended the gym)."
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

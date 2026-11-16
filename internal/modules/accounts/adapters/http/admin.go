@@ -19,6 +19,8 @@ func (h *Handler) AdminRoutes(admin gin.IRoutes) {
 	admin.DELETE("/groups/:id", h.deleteGroup)
 	admin.PATCH("/gyms/:gym_id", h.updateGymIdentity)
 	admin.PATCH("/gyms/:gym_id/features", h.updateGymFeatures)
+	admin.PATCH("/gyms/:gym_id/status", h.updateGymStatus)
+	admin.GET("/modules", h.listModules)
 	admin.POST("/gyms/:gym_id/branches", h.addBranch)
 	admin.PATCH("/branches/:id", h.updateBranch)
 	admin.DELETE("/branches/:id", h.deleteBranch)
@@ -130,6 +132,32 @@ func (h *Handler) updateGymFeatures(c *gin.Context) {
 	}
 	audit(c, "gym.features", "gym_id", gymID, "features", gym.Features)
 	apierror.OK(c, gym)
+}
+
+type statusRequest struct {
+	Status string `json:"status"`
+}
+
+func (h *Handler) updateGymStatus(c *gin.Context) {
+	gymID, ok := pathID(c, "gym_id")
+	if !ok {
+		return
+	}
+	var req statusRequest
+	if !bind(c, &req) {
+		return
+	}
+	gym, err := h.service.UpdateGymStatus(c.Request.Context(), gymID, req.Status)
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	audit(c, "gym.status", "gym_id", gymID, "status", gym.Status)
+	apierror.OK(c, gym)
+}
+
+func (h *Handler) listModules(c *gin.Context) {
+	apierror.OK(c, app.Modules())
 }
 
 type branchRequest struct {

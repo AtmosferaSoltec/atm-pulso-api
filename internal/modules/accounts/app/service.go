@@ -69,6 +69,9 @@ func (s *Service) Resolve(ctx context.Context, claims auth.Claims) (auth.Princip
 	if err != nil {
 		return auth.Principal{}, err
 	}
+	if tenancy.Suspended {
+		return auth.Principal{}, auth.ErrGymSuspended
+	}
 
 	user, err := s.Users.EnsureUser(ctx, UserInput{
 		GymID: tenancy.GymID, AuthUserID: authUser,
@@ -161,10 +164,27 @@ func KnownFeatures(stored []string) []string {
 	return out
 }
 
-// featuresOf turns the stored names into the closed list, ignoring any name the code no longer knows.
+// OptionalFeatures keeps only the switchable module names the code knows, in the fixed order, and never returns
+// nil: what the superadmin stored for a gym, without the base modules every gym has.
+func OptionalFeatures(stored []string) []string {
+	out := []string{}
+	for _, f := range featuresOf(stored) {
+		if !f.IsBase() {
+			out = append(out, string(f))
+		}
+	}
+	return out
+}
+
+// featuresOf turns the stored names into the closed list, ignoring any name the code no longer knows. Base
+// modules are always included.
 func featuresOf(stored []string) []auth.Feature {
 	features := []auth.Feature{}
 	for _, f := range auth.AllFeatures {
+		if f.IsBase() {
+			features = append(features, f)
+			continue
+		}
 		for _, name := range stored {
 			if string(f) == name {
 				features = append(features, f)

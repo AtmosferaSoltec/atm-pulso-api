@@ -149,9 +149,11 @@ func run() int {
 	protected := api.Group("", guard.User())
 	accountsModule.Routes(protected)
 	documentsModule.Routes(protected)
-	// The platform administrator (console-web) has its own, rate-limited surface.
+	// The platform administrator (console-web) has its own surface, only for superadmins. It shares the general
+	// per-IP limit: every console user reaches pulso-api from the console's proxy, so a tight limit would lock
+	// the console out after a few screens.
+	accountsModule.AdminRoutes(api.Group("/admin", guard.Superadmin()))
 	heavy := middleware.NewRateLimiter(cfg.LoginRateLimitPerMinute).Middleware()
-	accountsModule.AdminRoutes(api.Group("/admin", heavy, guard.Superadmin()))
 	members.New(members.Deps{Pool: pool, Clock: clock.System{}, Logos: logos}).Routes(protected)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
 	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected)

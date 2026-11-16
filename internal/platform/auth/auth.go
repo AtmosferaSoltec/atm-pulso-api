@@ -83,17 +83,21 @@ var (
 	ErrNoAccess = errors.New("no access")
 	// ErrInactive: the person was deactivated in Pulso.
 	ErrInactive = errors.New("user inactive")
+	// ErrGymSuspended: the platform suspended the person's gym (for example, for lack of payment).
+	ErrGymSuspended = errors.New("gym suspended")
 )
 
 // Codes of the guard, besides the shared ones.
 const (
 	CodeNoAccess     = "NO_ACCESS"
 	CodeUserInactive = "USER_INACTIVE"
+	CodeGymSuspended = "GYM_SUSPENDED"
 )
 
 var (
 	errNoAccess     = apierror.New(http.StatusForbidden, CodeNoAccess, "Tu cuenta no tiene acceso a Pulso. Contacta a Atmósfera.")
 	errUserInactive = apierror.New(http.StatusForbidden, CodeUserInactive, "Tu usuario está desactivado. Habla con el administrador.")
+	errGymSuspended = apierror.New(http.StatusForbidden, CodeGymSuspended, "El acceso de tu gimnasio está suspendido. Contacta a Atmósfera.")
 )
 
 // Resolver turns verified claims into who is asking. The accounts module implements it.
@@ -171,6 +175,9 @@ func (g *Guard) User() gin.HandlerFunc {
 			return
 		case errors.Is(err, ErrInactive):
 			apierror.Respond(c, errUserInactive)
+			return
+		case errors.Is(err, ErrGymSuspended):
+			apierror.Respond(c, errGymSuspended)
 			return
 		case err != nil:
 			apierror.Respond(c, err)

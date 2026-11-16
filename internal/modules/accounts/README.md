@@ -12,12 +12,23 @@ gym and a receptionist's branches belong to the user's gym (composite FKs), the 
 
 ## Use cases (`app.Service`)
 - `Resolve` (implements `auth.Resolver` for every private route): token claims -> group, gym and user
-  (created on first sight), `ErrNoAccess` / `ErrInactive`.
+  (created on first sight), `ErrNoAccess` / `ErrInactive` / `ErrGymSuspended`, and the gym's modules (base ones
+  always included).
 - `Me`, `UpdateProfile` (name and phone), `Catalog`, `UpdateGym` (day pass price, branch sharing, membership
   prices; a gym admin cannot touch the identity).
 - Team (`ListUsers`, `CreateUser`, `UpdateUser`, `SetUserActive`, `ResetUserPassword`): admin only, current gym.
   The account lives in atm-auth-api, reached through the `Directory` port.
-- Superadmin (`ListGroups` with sync, `CreateGroup`, `RenameGroup`, `DeleteGroup`, `MoveGym` inside `UpdateGymIdentity`, `UpdateGymIdentity`, `AddBranch`, `UpdateBranch`, `DeleteBranch`).
+- Superadmin (`ListGroups` with sync, `CreateGroup`, `RenameGroup`, `DeleteGroup`, `MoveGym` inside `UpdateGymIdentity`, `UpdateGymIdentity`, `UpdateGymFeatures`, `UpdateGymStatus`, `AddBranch`, `UpdateBranch`, `DeleteBranch`) and the module catalog (`Modules`).
+
+## Modules and suspension
+- `GET /admin/modules` publishes the catalog: the core of Pulso (`members`, `payments`, `access`, `reports`,
+  `team`) and every feature of `auth.AllFeatures`. A feature is **base** (`auth.BaseFeatures`, today `kiosk`:
+  every gym has it, it is never stored) or **optional** (switched on per gym with `PATCH /admin/gyms/{id}/features`).
+  The console names each code in Spanish; adding a feature here is enough for it to appear there.
+- `PATCH /admin/gyms/{id}/status` suspends (`suspended`) or reactivates (`active`) a gym. While suspended,
+  every private route answers `403 GYM_SUSPENDED` to its people; nothing is deleted.
+- The console shows **clients** instead of groups: `EnsureTenancy` already places every gym in the group of its
+  auth client, so a group is, in practice, one client.
 
 ## Gym logo
 `Me`, `UpdateProfile` and `Catalog` fill `logo_url` through the `LogoResolver` port (built in `main.go` from
@@ -35,6 +46,7 @@ It only ever resolves the principal's own company, caches 5 minutes at most and 
 | `UNAUTHORIZED` | 401 | missing, invalid or expired token |
 | `NO_ACCESS` | 403 | the token does not open Pulso (other system, unknown role, no company or client) |
 | `USER_INACTIVE` | 403 | the person was deactivated in Pulso |
+| `GYM_SUSPENDED` | 403 | the platform superadmin suspended the gym |
 | `FORBIDDEN` | 403 | wrong role, wrong kind of token, or identity fields sent by a gym admin |
 | `SCOPE_NOT_ALLOWED` | 403 / 400 | a gym or branch outside the caller's reach (400 when it is not in their gym) |
 | `ROLE_NOT_ASSIGNABLE` | 403 | role other than admin/receptionist, or refused by atm-auth-api |
@@ -44,7 +56,7 @@ It only ever resolves the principal's own company, caches 5 minutes at most and 
 | `GROUP_IN_USE` | 409 | removing a group that still has gyms |
 | `BRANCH_IN_USE` | 409 | removing a branch with history, people, or the last of its gym |
 | `AUTH_UNAVAILABLE` | 503 | atm-auth-api did not answer or is not configured |
-| `VALIDATION_FAILED` | 400 | bad fields; `details` lists `{field, code}` |
+| `VALIDATION_FAILED` | 400 | bad fields; `details` lists `{field, code}` (`STATUS_INVALID`, `FEATURES_INVALID`, …) |
 
 ## Team and `manage_users`
 The team page calls atm-auth-api's service members API (`/v1/service/members?tenant_id=`) with Pulso's service
