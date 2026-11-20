@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -116,7 +117,7 @@ func (r *Repository) List(ctx context.Context, gymID uuid.UUID, owner app.Owner)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := r.pool.Query(ctx, `SELECT id, content_type, size_bytes, created_at, storage_key FROM `+table.vouchers+`
+	rows, err := r.pool.Query(ctx, `SELECT id, content_type, size_bytes, created_at, storage_key, purged_at FROM `+table.vouchers+`
 		WHERE gym_id = $1 AND `+table.column+` = $2 ORDER BY created_at, id`, gymID, owner.ID)
 	if err != nil {
 		return nil, err
@@ -125,7 +126,7 @@ func (r *Repository) List(ctx context.Context, gymID uuid.UUID, owner app.Owner)
 	out := []app.Voucher{}
 	for rows.Next() {
 		var v app.Voucher
-		if err := rows.Scan(&v.ID, &v.ContentType, &v.SizeBytes, &v.CreatedAt, &v.StorageKey); err != nil {
+		if err := rows.Scan(&v.ID, &v.ContentType, &v.SizeBytes, &v.CreatedAt, &v.StorageKey, &v.PurgedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -137,24 +138,24 @@ func (r *Repository) List(ctx context.Context, gymID uuid.UUID, owner app.Owner)
 func (r *Repository) Find(ctx context.Context, gymID, voucherID uuid.UUID) (app.Voucher, app.Owner, error) {
 	var v app.Voucher
 	owner := app.Owner{Kind: domain.OwnerPayment}
-	err := r.pool.QueryRow(ctx, `SELECT v.id, v.content_type, v.size_bytes, v.created_at, v.storage_key, p.id, p.branch_id, b.gym_id, p.method
+	err := r.pool.QueryRow(ctx, `SELECT v.id, v.content_type, v.size_bytes, v.created_at, v.storage_key, v.purged_at, p.id, p.branch_id, b.gym_id, p.method
 		FROM payment_vouchers v
 		JOIN payments p ON p.id = v.payment_id AND p.gym_id = v.gym_id
 		JOIN branches b ON b.id = p.branch_id AND b.gym_id = p.gym_id
 		WHERE v.id = $1 AND v.gym_id = $2`, voucherID, gymID).
-		Scan(&v.ID, &v.ContentType, &v.SizeBytes, &v.CreatedAt, &v.StorageKey, &owner.ID, &owner.BranchID, &owner.GymID, &owner.Method)
+		Scan(&v.ID, &v.ContentType, &v.SizeBytes, &v.CreatedAt, &v.StorageKey, &v.PurgedAt, &owner.ID, &owner.BranchID, &owner.GymID, &owner.Method)
 	if err == nil || !errors.Is(err, pgx.ErrNoRows) {
 		return v, owner, err
 	}
 
 	var saleID *uuid.UUID
-	err = r.pool.QueryRow(ctx, `SELECT v.id, v.content_type, v.size_bytes, v.created_at, v.storage_key, v.sale_id,
+	err = r.pool.QueryRow(ctx, `SELECT v.id, v.content_type, v.size_bytes, v.created_at, v.storage_key, v.purged_at, v.sale_id,
 			COALESCE(s.id, c.id), COALESCE(s.branch_id, c.branch_id), v.gym_id, COALESCE(s.method, c.method, '')
 		FROM sale_vouchers v
 		LEFT JOIN sales s ON s.id = v.sale_id AND s.gym_id = v.gym_id
 		LEFT JOIN sale_collections c ON c.id = v.collection_id AND c.gym_id = v.gym_id
 		WHERE v.id = $1 AND v.gym_id = $2`, voucherID, gymID).
-		Scan(&v.ID, &v.ContentType, &v.SizeBytes, &v.CreatedAt, &v.StorageKey, &saleID, &owner.ID, &owner.BranchID, &owner.GymID, &owner.Method)
+		Scan(&v.ID, &v.ContentType, &v.SizeBytes, &v.CreatedAt, &v.StorageKey, &v.PurgedAt, &saleID, &owner.ID, &owner.BranchID, &owner.GymID, &owner.Method)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return v, owner, domain.ErrVoucherNotFound
 	}
@@ -196,4 +197,55 @@ func (r *Repository) SaleCounts(ctx context.Context, gymID uuid.UUID, saleIDs, c
 		}
 	}
 	return bySale, byCollection, rows.Err()
+}
+
+// Purgeable reads both voucher tables across every gym: the purge is a maintenance job, not a user's request.
+// The partial indexes of migration 00026 keep it cheap once most rows are purged.
+func (r *Repository) Purgeable(ctx context.Context, before time.Time, limit int) ([]app.Purgeable, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id, kind, storage_key FROM (
+			(SELECT id, 'payment' AS kind, storage_key, created_at FROM payment_vouchers
+				WHERE purged_at IS NULL AND created_at < $1 ORDER BY created_at, id LIMIT $2)
+			UNION ALL
+			(SELECT id, 'sale' AS kind, storage_key, created_at FROM sale_vouchers
+				WHERE purged_at IS NULL AND created_at < $1 ORDER BY created_at, id LIMIT $2)
+		) due ORDER BY created_at, id LIMIT $2`, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []app.Purgeable{}
+	for rows.Next() {
+		var v app.Purgeable
+		var kind string
+		if err := rows.Scan(&v.ID, &kind, &v.StorageKey); err != nil {
+			return nil, err
+		}
+		v.Kind = domain.OwnerKind(kind)
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) MarkPurged(ctx context.Context, vouchers []app.Purgeable, at time.Time) error {
+	var payments, sales []uuid.UUID
+	for _, v := range vouchers {
+		if v.Kind == domain.OwnerPayment {
+			payments = append(payments, v.ID)
+		} else {
+			sales = append(sales, v.ID)
+		}
+	}
+	return tx.Runner{Pool: r.pool}.Run(ctx, func(t pgx.Tx) error {
+		if len(payments) > 0 {
+			if _, err := t.Exec(ctx, `UPDATE payment_vouchers SET purged_at = $1 WHERE id = ANY($2) AND purged_at IS NULL`, at, payments); err != nil {
+				return err
+			}
+		}
+		if len(sales) > 0 {
+			if _, err := t.Exec(ctx, `UPDATE sale_vouchers SET purged_at = $1 WHERE id = ANY($2) AND purged_at IS NULL`, at, sales); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

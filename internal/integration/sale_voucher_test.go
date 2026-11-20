@@ -65,25 +65,22 @@ func TestSaleVouchers(t *testing.T) {
 	assert.Equal(t, 404, onSale(admin, "not-a-uuid", 0).status)
 	assert.Zero(t, h.vouchers.count(), "a rejected file is never stored")
 
-	// Up to five per sale, a PDF among them; the sixth is refused and not kept.
+	// Exactly one per sale; a second one (a PDF here) is refused and not kept.
 	first := onSale(reception, yape, 1)
 	require.Equal(t, 201, first.status, first.body)
 	assert.Equal(t, "image/png", first.data()["content_type"])
 	assert.Nil(t, first.data()["storage_key"], "the key never leaves the server")
-	for i := 2; i <= 4; i++ {
-		require.Equal(t, 201, onSale(reception, yape, i).status)
-	}
-	require.Equal(t, 201, h.postFile(t, admin, "/sales/"+yape+"/vouchers", append([]byte("%PDF-1.4\n"), []byte("proof-5")...)).status)
-	sixth := onSale(reception, yape, 6)
-	assert.Equal(t, 409, sixth.status)
-	assert.Equal(t, "VOUCHER_LIMIT_REACHED", sixth.errorCode())
-	assert.Equal(t, 5, h.vouchers.count())
+	assertExpiry(t, first.data(), false)
+	second := h.postFile(t, admin, "/sales/"+yape+"/vouchers", append([]byte("%PDF-1.4\n"), []byte("proof-2")...))
+	assert.Equal(t, 409, second.status)
+	assert.Equal(t, "VOUCHER_LIMIT_REACHED", second.errorCode())
+	assert.Equal(t, 1, h.vouchers.count())
 
 	// Listing and downloading through the same file endpoint as the payments'.
 	list := h.call(t, http.MethodGet, "/sales/"+yape+"/vouchers", reception, nil)
 	require.Equal(t, 200, list.status, list.body)
 	items, _ := list.body["data"].([]any)
-	require.Len(t, items, 5)
+	require.Len(t, items, 1)
 	voucher := items[0].(map[string]any)["id"].(string)
 	file := h.callRaw(t, http.MethodGet, "/vouchers/"+voucher+"/file", reception)
 	require.Equal(t, 200, file.Code)
@@ -126,17 +123,16 @@ func TestSaleVouchers(t *testing.T) {
 	assert.Equal(t, "VOUCHER_SALE_COLLECTED", res.errorCode())
 	res = onCollection(reception, cashCollection, 1)
 	assert.Equal(t, []string{"collection:VOUCHER_NOT_FOR_CASH"}, fieldCodes(res))
-	for i := 1; i <= 2; i++ {
-		created := onCollection(reception, transfer, i)
-		require.Equal(t, 201, created.status, created.body)
-	}
+	created := onCollection(reception, transfer, 1)
+	require.Equal(t, 201, created.status, created.body)
+	assert.Equal(t, "VOUCHER_LIMIT_REACHED", onCollection(reception, transfer, 2).errorCode(), "one per collection too")
 	collectionList := h.call(t, http.MethodGet, "/sales/collections/"+transfer+"/vouchers", reception, nil)
 	require.Equal(t, 200, collectionList.status)
 	collectionItems := collectionList.body["data"].([]any)
-	require.Len(t, collectionItems, 2)
-	collectionFile := h.callRaw(t, http.MethodGet, "/vouchers/"+collectionItems[1].(map[string]any)["id"].(string)+"/file", reception)
+	require.Len(t, collectionItems, 1)
+	collectionFile := h.callRaw(t, http.MethodGet, "/vouchers/"+collectionItems[0].(map[string]any)["id"].(string)+"/file", reception)
 	require.Equal(t, 200, collectionFile.Code)
-	assert.Equal(t, proof(102), collectionFile.Body.Bytes())
+	assert.Equal(t, proof(101), collectionFile.Body.Bytes())
 	assert.Equal(t, 404, onCollection(reception, farCollection, 1).status, "collected in a branch out of reach")
 	assert.Equal(t, 404, h.call(t, http.MethodGet, "/sales/collections/"+farCollection+"/vouchers", reception, nil).status)
 	assert.Equal(t, 201, onCollection(admin, farCollection, 1).status)
@@ -153,7 +149,7 @@ func TestSaleVouchers(t *testing.T) {
 		r := row.(map[string]any)
 		counts[r["id"].(string)] = r["voucher_count"].(float64)
 	}
-	assert.Equal(t, map[string]float64{yape: 5, cash: 0, far: 1, open1: 2, open2: 0, openBeto: 1}, counts)
+	assert.Equal(t, map[string]float64{yape: 1, cash: 0, far: 1, open1: 1, open2: 0, openBeto: 1}, counts)
 	history := h.call(t, http.MethodGet, "/members/"+ana+"/sales", reception, nil)
 	require.Equal(t, 200, history.status)
 	for _, row := range history.body["data"].([]any) {
@@ -195,6 +191,6 @@ func TestSaleVoucherLimitHoldsUnderConcurrency(t *testing.T) {
 	for s := range statuses {
 		byStatus[s]++
 	}
-	assert.Equal(t, map[int]int{201: 5, 409: 3}, byStatus)
-	assert.Equal(t, 5, h.vouchers.count(), "the refused files are deleted from the store")
+	assert.Equal(t, map[int]int{201: 1, 409: 7}, byStatus)
+	assert.Equal(t, 1, h.vouchers.count(), "the refused files are deleted from the store")
 }

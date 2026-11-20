@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers/domain"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/ids"
 )
 
@@ -42,13 +44,25 @@ const (
 	saleStatusPaid = "paid"
 )
 
-// Voucher is one stored proof of payment. The key never leaves the server.
+// Voucher is one stored proof of payment. The key never leaves the server. ExpiresAt is when its file is
+// deleted (nil when files are kept forever) and Expired says the file is gone or due: then it cannot be read.
 type Voucher struct {
-	ID          uuid.UUID `json:"id"`
-	ContentType string    `json:"content_type"`
-	SizeBytes   int       `json:"size_bytes"`
-	CreatedAt   time.Time `json:"created_at"`
-	StorageKey  string    `json:"-"`
+	ID          uuid.UUID  `json:"id"`
+	ContentType string     `json:"content_type"`
+	SizeBytes   int        `json:"size_bytes"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ExpiresAt   *time.Time `json:"expires_at"`
+	Expired     bool       `json:"expired"`
+	StorageKey  string     `json:"-"`
+	PurgedAt    *time.Time `json:"-"`
+}
+
+// Purgeable is a voucher whose file is past the retention period and still in the object store.
+type Purgeable struct {
+	ID uuid.UUID
+	// Kind says the table: domain.OwnerPayment for payment_vouchers, any other for sale_vouchers.
+	Kind       domain.OwnerKind
+	StorageKey string
 }
 
 // NewVoucher is a voucher about to be stored.
@@ -76,6 +90,11 @@ type Repository interface {
 	Find(ctx context.Context, gymID, voucherID uuid.UUID) (Voucher, Owner, error)
 	// SaleCounts counts the vouchers of the given sales and collections of the gym (absent = none).
 	SaleCounts(ctx context.Context, gymID uuid.UUID, saleIDs, collectionIDs []uuid.UUID) (bySale, byCollection map[uuid.UUID]int, err error)
+	// Purgeable lists, oldest first and across every gym, up to limit vouchers created before the instant
+	// whose file was not purged yet.
+	Purgeable(ctx context.Context, before time.Time, limit int) ([]Purgeable, error)
+	// MarkPurged records that the files of those vouchers were deleted. The rows stay.
+	MarkPurged(ctx context.Context, vouchers []Purgeable, at time.Time) error
 }
 
 // File is a stored voucher being read; the caller closes Body.
@@ -92,10 +111,41 @@ type Store interface {
 	Get(ctx context.Context, key string) (File, error)
 }
 
+// DefaultPurgeBatch is how many vouchers one purge step handles.
+const DefaultPurgeBatch = 200
+
 // Service is the vouchers use cases.
 type Service struct {
 	Repo  Repository
 	Store Store // nil when no object store is configured
+	// Clock gives "now" for the retention; nil means the system clock.
+	Clock clock.Clock
+	// Retention is how long files are kept; zero keeps them forever.
+	Retention domain.Retention
+	// PurgeBatch is how many vouchers one purge step handles; zero means DefaultPurgeBatch.
+	PurgeBatch int
+}
+
+func (s *Service) now() time.Time {
+	if s.Clock == nil {
+		return time.Now().UTC()
+	}
+	return s.Clock.Now()
+}
+
+// withExpiry fills when the file of each voucher is deleted and whether it already is (or is due).
+func (s *Service) withExpiry(vouchers []Voucher) []Voucher {
+	now := s.now()
+	for i := range vouchers {
+		vouchers[i] = s.expiry(vouchers[i], now)
+	}
+	return vouchers
+}
+
+func (s *Service) expiry(v Voucher, now time.Time) Voucher {
+	v.ExpiresAt = s.Retention.ExpiresAt(v.CreatedAt)
+	v.Expired = s.Retention.Expired(v.CreatedAt, v.PurgedAt != nil, now)
+	return v
 }
 
 // reach says whether the user may work with the owner: the same reach as the branch its money was received in.
@@ -162,15 +212,16 @@ func (s *Service) store(ctx context.Context, p auth.Principal, owner Owner, fiel
 	if err := s.Store.Put(ctx, key, contentType, data); err != nil {
 		return Voucher{}, fmt.Errorf("store voucher: %w", err)
 	}
+	now := s.now()
 	row := NewVoucher{
-		Voucher: Voucher{ID: id, ContentType: contentType, SizeBytes: len(data), CreatedAt: time.Now().UTC(), StorageKey: key},
+		Voucher: Voucher{ID: id, ContentType: contentType, SizeBytes: len(data), CreatedAt: now, StorageKey: key},
 		GymID:   p.GymID, Owner: owner, UploadedBy: p.UserID,
 	}
 	if err := s.Repo.Add(ctx, row, domain.MaxPerPayment); err != nil {
 		s.discard(key)
 		return Voucher{}, err
 	}
-	return row.Voucher, nil
+	return s.expiry(row.Voucher, now), nil
 }
 
 // storageKey places the file in the bucket: vouchers/<gym>/<payment>/<id> for memberships (as always),
@@ -195,7 +246,15 @@ func (s *Service) List(ctx context.Context, p auth.Principal, receiptID uuid.UUI
 	if !reach(p, owner) {
 		return nil, domain.ErrReceiptNotFound
 	}
-	return s.Repo.List(ctx, p.GymID, owner)
+	return s.list(ctx, p.GymID, owner)
+}
+
+func (s *Service) list(ctx context.Context, gymID uuid.UUID, owner Owner) ([]Voucher, error) {
+	vouchers, err := s.Repo.List(ctx, gymID, owner)
+	if err != nil {
+		return nil, err
+	}
+	return s.withExpiry(vouchers), nil
 }
 
 // ListForSale returns the vouchers of a product sale, oldest first. A pending sale, or one collected later
@@ -205,7 +264,7 @@ func (s *Service) ListForSale(ctx context.Context, p auth.Principal, saleID uuid
 	if err != nil {
 		return nil, err
 	}
-	return s.Repo.List(ctx, p.GymID, sale.Owner)
+	return s.list(ctx, p.GymID, sale.Owner)
 }
 
 // ListForCollection returns the vouchers of a collection of pending sales, oldest first.
@@ -214,7 +273,7 @@ func (s *Service) ListForCollection(ctx context.Context, p auth.Principal, colle
 	if err != nil {
 		return nil, err
 	}
-	return s.Repo.List(ctx, p.GymID, owner)
+	return s.list(ctx, p.GymID, owner)
 }
 
 func (s *Service) sale(ctx context.Context, p auth.Principal, saleID uuid.UUID) (SaleInfo, error) {
@@ -240,6 +299,7 @@ func (s *Service) collection(ctx context.Context, p auth.Principal, collectionID
 }
 
 // Open returns the file of a voucher, whatever it proves. The vouchers of product sales need the sales module.
+// A voucher past its retention answers domain.ErrExpired: its file is gone (or about to be).
 func (s *Service) Open(ctx context.Context, p auth.Principal, voucherID uuid.UUID) (Voucher, File, error) {
 	v, owner, err := s.Repo.Find(ctx, p.GymID, voucherID)
 	if err != nil {
@@ -250,6 +310,9 @@ func (s *Service) Open(ctx context.Context, p auth.Principal, voucherID uuid.UUI
 	}
 	if owner.Kind != domain.OwnerPayment && !p.HasFeature(auth.FeatureSales) {
 		return Voucher{}, File{}, domain.ErrFeatureDisabled
+	}
+	if v = s.expiry(v, s.now()); v.Expired {
+		return Voucher{}, File{}, domain.ErrExpired
 	}
 	if s.Store == nil {
 		return Voucher{}, File{}, domain.ErrStorageUnavailable
@@ -273,5 +336,46 @@ func (s *Service) discard(key string) {
 	defer cancel()
 	if err := s.Store.Delete(ctx, key); err != nil {
 		slog.Warn("could not delete an unused voucher from the object store", "key", key, "error", err)
+	}
+}
+
+// Purge deletes from the object store the files of the vouchers past the retention period and marks their rows
+// as purged; the rows stay, so counts and history remain. It works in batches until none is left. A file that
+// cannot be deleted is logged and skipped (retried on the next run); one already missing counts as deleted.
+// Without an object store or without retention it does nothing. It returns how many files it purged.
+func (s *Service) Purge(ctx context.Context) (int, error) {
+	if s.Store == nil || !s.Retention.Enabled() {
+		return 0, nil
+	}
+	batch := s.PurgeBatch
+	if batch <= 0 {
+		batch = DefaultPurgeBatch
+	}
+	now := s.now()
+	before := now.Add(-time.Duration(s.Retention))
+	purged := 0
+	for {
+		due, err := s.Repo.Purgeable(ctx, before, batch)
+		if err != nil {
+			return purged, fmt.Errorf("list purgeable vouchers: %w", err)
+		}
+		deleted := make([]Purgeable, 0, len(due))
+		for _, v := range due {
+			if err := s.Store.Delete(ctx, v.StorageKey); err != nil && !errors.Is(err, domain.ErrVoucherNotFound) {
+				slog.Warn("could not delete an expired voucher from the object store", "voucher", v.ID, "error", err)
+				continue
+			}
+			deleted = append(deleted, v)
+		}
+		if len(deleted) > 0 {
+			if err := s.Repo.MarkPurged(ctx, deleted, now); err != nil {
+				return purged, fmt.Errorf("mark vouchers purged: %w", err)
+			}
+		}
+		purged += len(deleted)
+		// A short batch was the last one; a batch where nothing could be deleted would only repeat itself.
+		if len(due) < batch || len(deleted) == 0 {
+			return purged, nil
+		}
 	}
 }

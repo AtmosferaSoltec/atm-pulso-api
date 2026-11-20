@@ -47,3 +47,18 @@ func TestProductionNeedsTheAuthIssuerAndTheServiceSecret(t *testing.T) {
 	assert.Contains(t, err.Error(), "AUTH_CLIENT_SECRET is required in production")
 	assert.NotContains(t, err.Error(), "JWT_ACCESS_SECRET", "passwords and tokens are atm-auth-api's now")
 }
+
+func TestVoucherRetentionDays(t *testing.T) {
+	cfg, err := LoadFrom(env(development))
+	require.NoError(t, err)
+	assert.Equal(t, 90, cfg.VoucherRetentionDays, "kept 90 days unless told otherwise")
+
+	for value, want := range map[string]int{"30": 30, "0": 0, "-1": -1, " 7 ": 7} {
+		cfg, err = LoadFrom(env(with(map[string]string{"VOUCHER_RETENTION_DAYS": value})))
+		require.NoError(t, err, value)
+		assert.Equal(t, want, cfg.VoucherRetentionDays, value)
+	}
+
+	_, err = LoadFrom(env(with(map[string]string{"VOUCHER_RETENTION_DAYS": "ninety"})))
+	require.ErrorContains(t, err, "VOUCHER_RETENTION_DAYS")
+}

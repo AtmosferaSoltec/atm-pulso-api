@@ -20,7 +20,14 @@ func (s Store) Put(ctx context.Context, key, contentType string, data []byte) er
 	return s.client.Put(ctx, key, contentType, data)
 }
 
-func (s Store) Delete(ctx context.Context, key string) error { return s.client.Delete(ctx, key) }
+// Delete removes the file; a missing one answers domain.ErrVoucherNotFound (the purge counts it as deleted).
+func (s Store) Delete(ctx context.Context, key string) error {
+	err := s.client.Delete(ctx, key)
+	if errors.Is(err, objectstore.ErrNotFound) {
+		return domain.ErrVoucherNotFound
+	}
+	return err
+}
 
 func (s Store) Get(ctx context.Context, key string) (app.File, error) {
 	object, err := s.client.Get(ctx, key)

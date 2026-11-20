@@ -23,10 +23,11 @@ const (
 )
 
 const (
-	defaultIdentityURL   = "http://identity-api:8080"
-	defaultStorageAPIURL = "http://storage-api:8084"
-	defaultAuthURL       = "http://auth-api:8080"
-	defaultSystemCode    = "pulso"
+	defaultVoucherRetentionDays = 90
+	defaultIdentityURL          = "http://identity-api:8080"
+	defaultStorageAPIURL        = "http://storage-api:8084"
+	defaultAuthURL              = "http://auth-api:8080"
+	defaultSystemCode           = "pulso"
 )
 
 // Config is the validated environment.
@@ -41,6 +42,9 @@ type Config struct {
 	Identity                IdentityConfig
 	StorageAPI              StorageAPIConfig
 	Storage                 StorageConfig
+	// VoucherRetentionDays is how long voucher files stay in R2 before they are deleted; zero or less keeps
+	// them forever.
+	VoucherRetentionDays int
 }
 
 // AuthConfig is how to trust and call atm-auth-api, which owns identity and access.
@@ -120,6 +124,7 @@ func LoadFrom(lookup func(string) string) (Config, error) {
 			AccessKeyID:     r.optional("R2_ACCESS_KEY_ID"),
 			SecretAccessKey: r.optional("R2_SECRET_ACCESS_KEY"),
 		},
+		VoucherRetentionDays: r.intOr("VOUCHER_RETENTION_DAYS", defaultVoucherRetentionDays),
 	}
 
 	if cfg.StorageAPI.URL == "" {
@@ -236,6 +241,20 @@ func (r *reader) positiveIntOr(name string, fallback int) int {
 	n, err := strconv.Atoi(value)
 	if err != nil || n <= 0 {
 		r.fail("%s must be a positive whole number (got %q)", name, value)
+		return fallback
+	}
+	return n
+}
+
+// intOr reads a whole number, which may be zero or negative.
+func (r *reader) intOr(name string, fallback int) int {
+	value := r.optional(name)
+	if value == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		r.fail("%s must be a whole number (got %q)", name, value)
 		return fallback
 	}
 	return n

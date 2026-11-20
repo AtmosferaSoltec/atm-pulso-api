@@ -122,8 +122,9 @@ No tables. Aggregate queries over `payments` and `memberships`. Add the indexes 
 ## payment_vouchers (module vouchers)
 Proof of payment files attached to a payment: `id`, `organization_id`, `payment_id` (composite FK to
 `payments(id, organization_id)`, `ON DELETE CASCADE`), `storage_key` (private R2 object), `content_type`
-(png, jpeg, webp or pdf), `size_bytes`, `uploaded_by`, `created_at`. At most five per payment, never for
-cash, immutable. `payments` gets `UNIQUE (id, organization_id)` for that foreign key.
+(png, jpeg, webp or pdf), `size_bytes`, `uploaded_by`, `created_at`, `purged_at` (00026: when its file was deleted
+after the retention period; the row stays). At most one per payment (five before 00026's release; older rows keep
+theirs), never for cash, immutable. `sale_vouchers` (00025) has the same columns and rules. `payments` gets `UNIQUE (id, organization_id)` for that foreign key.
 
 
 ## Plan 08 additions (migrations 00014 and 00015)

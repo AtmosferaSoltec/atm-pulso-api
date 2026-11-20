@@ -109,3 +109,20 @@ Before deploying: system `pulso` with roles `admin`/`receptionist` in the consol
   `voucher_count`. New error codes: `VOUCHER_SALE_NOT_PAID` (409), `VOUCHER_SALE_COLLECTED` (409).
 - The new upload paths get the same 10 MB body limit as `/receipts/{id}/vouchers` (wired from `vouchers.BodyLimits`);
   the host nginx must allow those bodies there as it already does for the receipts' uploads.
+
+## Voucher retention (migration 00026)
+
+- `00026_vouchers_retention`: adds nullable `purged_at timestamptz` to `payment_vouchers` and `sale_vouchers`, plus
+  partial indexes `payment_vouchers_purgeable_idx` / `sale_vouchers_purgeable_idx` on `(created_at, id) WHERE purged_at IS NULL`.
+  Purely additive (existing rows keep `purged_at` NULL); the `down` drops the indexes and columns.
+- New environment variable **`VOUCHER_RETENTION_DAYS`** (optional, default `90`; `0` or negative keeps files forever).
+  Two minutes after start and then every six hours the API deletes from R2 the files of vouchers older than that
+  (batches of 200, across every gym) and stamps `purged_at`; rows are kept, so `voucher_count` and history stay.
+  **On the first start after deploy every voucher older than 90 days is deleted from R2**: set the variable in
+  `/opt/pulso-api/.env` beforehand if a different period is wanted. It does nothing while R2 is not configured.
+- Rules: exactly **one** voucher per payment, sale or collection (was five; existing rows with more stay untouched),
+  `409 VOUCHER_LIMIT_REACHED` for a second. Max file **2 MB** (was 10 MB); the body limits follow `vouchers.BodyLimits`.
+- Responses: every voucher carries `expires_at` (date-time or null when retention is off) and `expired` (bool).
+  `GET /vouchers/{id}/file` answers **`410 VOUCHER_EXPIRED`** for an expired voucher.
+- The host nginx may lower the `^/api/v1/.+/vouchers$` body limit from `11m` to `3m` (2 MB plus room); it is optional,
+  the API refuses larger bodies itself.

@@ -139,7 +139,9 @@ func respond(c *gin.Context, err error) {
 	case errors.Is(err, domain.ErrForbidden):
 		apierror.Respond(c, apierror.ErrForbidden)
 	case errors.Is(err, domain.ErrLimitReached):
-		apierror.Respond(c, apierror.New(http.StatusConflict, "VOUCHER_LIMIT_REACHED", "Este pago ya tiene el máximo de comprobantes."))
+		apierror.Respond(c, apierror.New(http.StatusConflict, "VOUCHER_LIMIT_REACHED", "Este pago ya tiene su comprobante."))
+	case errors.Is(err, domain.ErrExpired):
+		apierror.Respond(c, apierror.New(http.StatusGone, "VOUCHER_EXPIRED", "Este comprobante ya venció y se borró."))
 	case errors.Is(err, domain.ErrStorageUnavailable):
 		apierror.Respond(c, apierror.New(http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "El almacenamiento de imágenes no está disponible."))
 	default:

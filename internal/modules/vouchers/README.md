@@ -3,8 +3,9 @@
 Owns the **proofs of payment**: a photo or PDF of the transfer, Yape/Plin or card receipt, attached
 to the money it proves: the payment of a receipt (memberships, day passes), a **product sale paid on the
 spot** or a **collection of pending product sales** (module `sales`, which never writes payments). Optional
-(cash needs none), up to five per payment / sale / collection (one payment may be split in several transfers)
-and **immutable**: no edit, no delete, because they are evidence for later claims.
+(cash needs none), **exactly one** per payment / sale / collection (it was five; older rows with more stay as
+they are) and **immutable**: no edit, no delete by people, because they are evidence for later claims. To keep
+the object store small, the **files** are deleted after a retention period (see Retention); the rows stay.
 
 ## Tables (it owns them)
 - `payment_vouchers` (migration 00011): key and metadata only; files under `vouchers/<gym>/<payment>/<id>.<ext>`.
@@ -19,8 +20,8 @@ untouched (no data migration), and each owner keeps a real composite FK instead 
 The tables it proves (`payments`, `sales`, `sale_collections`) belong to other modules; this module only reads them.
 
 ## Endpoints
-`POST /receipts/{id}/vouchers` (the file as the raw body: PNG, JPEG, WebP or PDF, up to 10 MB, checked
-by content), `GET /receipts/{id}/vouchers`, `GET /vouchers/{id}/file`. They are addressed by the receipt
+`POST /receipts/{id}/vouchers` (the file as the raw body: PNG, JPEG, WebP or PDF, up to 2 MB, checked
+by content; the web and the app shrink photos first), `GET /receipts/{id}/vouchers`, `GET /vouchers/{id}/file`. They are addressed by the receipt
 because that is what the sale returns and what the payments list shows. Reach is the reach of the branch
 where the payment was collected (admin: the current gym, reception: their branches). The file endpoint needs the token, so the web
 fetches it and shows the bytes: it is never a public link.
@@ -32,14 +33,28 @@ errors as above; reach is the branch of the sale or of the collection. Uploading
 the collection); listing either answers an empty list. Their files are served by the same `GET /vouchers/{id}/file`,
 which also asks for the sales module for these.
 
-`BodyLimits(prefix)` gives every upload route its 10 MB body limit (used by `cmd/api` and the tests).
+Every voucher in a response carries `expires_at` (when its file is deleted; `null` when retention is off) and
+`expired` (the file is purged or past its retention: no thumbnail, and its file answers `410 VOUCHER_EXPIRED`).
+
+`BodyLimits(prefix)` gives every upload route its 2 MB body limit (used by `cmd/api` and the tests).
 `Module.SaleVoucherCounts` is handed to the sales module (its `Vouchers` port, wired in `main.go`) for the
 `voucher_count` of its sale rows.
+
+## Retention
+- `VOUCHER_RETENTION_DAYS` (config, default 90; 0 or negative keeps files forever) sets how long a file lives.
+- Migration 00026 adds `purged_at` to both tables, with partial indexes on `(created_at, id) WHERE purged_at IS NULL`.
+- `Module.RunPurge(ctx)` (started by `cmd/api/main.go` with the server's context) runs two minutes after start and
+  then every six hours: `app.Service.Purge` takes, oldest first and across every gym, batches of 200 vouchers with
+  `purged_at IS NULL AND created_at < now - retention`, deletes each file from the store and stamps `purged_at`.
+  A delete that fails is logged and skipped (retried next round); a file already missing counts as deleted. It
+  does nothing without an object store or with retention off. `Module.PurgeExpired` runs it once (tests).
+- Rows are never deleted: `voucher_count` keeps counting them and the one-per-owner limit still applies.
+- A voucher past its retention is `expired` even before the purge reaches it (the purge runs every six hours).
 
 ## Rules
 - Cash payments refuse vouchers (`VOUCHER_NOT_FOR_CASH`); other types or sizes: `VOUCHER_TYPE_INVALID`,
   `VOUCHER_SIZE_INVALID`.
-- The limit of five is enforced under a row lock on the payment, so concurrent uploads cannot beat it
+- The limit of one is enforced under a row lock on the payment, so concurrent uploads cannot beat it
   (`409 VOUCHER_LIMIT_REACHED`). A file whose row was refused is deleted from the bucket; if that delete
   fails the orphan is only logged.
 - Without the R2 variables (development) uploads and downloads answer `503 STORAGE_UNAVAILABLE`.
@@ -50,7 +65,8 @@ which also asks for the sales module for these.
 | code | status | when |
 |---|---|---|
 | `VALIDATION_FAILED` | 400 | cash (field `receipt`, `sale` or `collection`: `VOUCHER_NOT_FOR_CASH`), wrong file type, empty or too large file (field `voucher`) |
-| `VOUCHER_LIMIT_REACHED` | 409 | the payment, sale or collection already has five |
+| `VOUCHER_LIMIT_REACHED` | 409 | the payment, sale or collection already has its voucher |
+| `VOUCHER_EXPIRED` | 410 | `GET /vouchers/{id}/file` of an expired voucher: its file was deleted |
 | `VOUCHER_SALE_NOT_PAID` | 409 | the sale is still pending |
 | `VOUCHER_SALE_COLLECTED` | 409 | the sale was paid by a collection: attach to the collection |
 | `FEATURE_DISABLED` | 403 | sale/collection vouchers (and their files) in a gym without the sales module |

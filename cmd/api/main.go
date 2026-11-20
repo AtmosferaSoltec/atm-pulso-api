@@ -159,8 +159,11 @@ func run() int {
 	membersModule.Routes(protected)
 	membersModule.ExportRoutes(protected, heavy)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
-	vouchersModule := vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore})
+	vouchersModule := vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore, Clock: clock.System{},
+		RetentionDays: cfg.VoucherRetentionDays})
 	vouchersModule.Routes(protected)
+	// Deletes voucher files past VOUCHER_RETENTION_DAYS from R2 in the background; stops with the server.
+	go vouchersModule.RunPurge(ctx)
 	kiosk.New(kiosk.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
 	salesModule := sales.New(sales.Deps{Pool: pool, Clock: clock.System{}, Brands: brands, Vouchers: vouchersModule})
 	salesModule.Routes(protected)

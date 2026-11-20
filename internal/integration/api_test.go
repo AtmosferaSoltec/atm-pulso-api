@@ -49,6 +49,8 @@ type harness struct {
 	router   *gin.Engine
 	pool     *pgxpool.Pool
 	vouchers *memoryVouchers
+	// voucherModule runs the purge of expired voucher files on demand.
+	voucherModule *vouchers.Module
 	// auth plays atm-auth-api's service API (companies and members).
 	auth *authapi.Fake
 	// storage plays atm-storage-api (temporary links of company logos).
@@ -90,7 +92,7 @@ func newHarness(t *testing.T) harness {
 	membersModule.Routes(protected)
 	membersModule.ExportRoutes(protected, heavy)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
-	vouchersModule := vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore})
+	vouchersModule := vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore, Clock: clock.System{}, RetentionDays: voucherRetentionDays})
 	vouchersModule.Routes(protected)
 	kiosk.New(kiosk.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
 	salesModule := sales.New(sales.Deps{Pool: pool, Clock: clock.System{}, Brands: brands, Vouchers: vouchersModule})
@@ -101,7 +103,7 @@ func newHarness(t *testing.T) harness {
 	bodyModule.Routes(protected)
 	bodyModule.ExportRoutes(protected, heavy)
 	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}, Brands: brands}).Routes(protected, heavy)
-	return harness{router: router, pool: pool, vouchers: voucherStore, auth: authFake, storage: storageFake, people: &sync.Map{}, tokens: tokens}
+	return harness{router: router, pool: pool, vouchers: voucherStore, voucherModule: vouchersModule, auth: authFake, storage: storageFake, people: &sync.Map{}, tokens: tokens}
 }
 
 type response struct {
