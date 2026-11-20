@@ -350,18 +350,7 @@ func table(d *export.Doc, newestFirst []app.MeasurementView) {
 		{Header: "Pecho (cm)", Width: 12, Right: true},
 		{Header: "Cadera (cm)", Width: 12, Right: true},
 	}
-	rows := make([][]string, 0, len(newestFirst))
-	for _, m := range newestFirst {
-		row := []string{dateOf(m.MeasuredOn)}
-		for _, metric := range metrics {
-			if v, ok := number(metric.value(m)); ok {
-				row = append(row, strconv.FormatFloat(v, 'f', 1, 64))
-			} else {
-				row = append(row, "—")
-			}
-		}
-		rows = append(rows, row)
-	}
+	rows := tableRows(newestFirst)
 	d.Table(columns, rows, nil)
 	d.Ln(6)
 }
@@ -407,4 +396,21 @@ func notes(d *export.Doc, newestFirst []app.MeasurementView) {
 		}
 		d.SetY(y + 4)
 	}
+}
+
+// tableRows is one row per measurement of the table: the date and every metric ("—" when absent).
+func tableRows(newestFirst []app.MeasurementView) [][]string {
+	rows := make([][]string, 0, len(newestFirst))
+	for _, m := range newestFirst {
+		row := []string{dateOf(m.MeasuredOn)}
+		for _, metric := range metrics {
+			if v, ok := number(metric.value(m)); ok {
+				row = append(row, strconv.FormatFloat(v, 'f', 1, 64))
+			} else {
+				row = append(row, "—")
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }

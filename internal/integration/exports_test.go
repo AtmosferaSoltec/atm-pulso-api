@@ -360,3 +360,29 @@ func TestMeasurementsPDFIsGuardedAndAuditedLikeTheReads(t *testing.T) {
 	assert.Equal(t, 404, h.call(t, http.MethodGet, "/members/not-an-id/measurements/pdf", admin, nil).status)
 	assert.Len(t, h.auditRows(t, member), before+2)
 }
+
+func TestMeasurementsPDFHasOneRowPerDay(t *testing.T) {
+	h := newHarness(t)
+	tn := h.newTenant(t)
+	admin, reception := h.token(t, tn.Admin), h.token(t, tn.Receptionist)
+	res := h.enroll(t, admin, enrollBody(tn.BranchA, uniqueDocument()))
+	require.Equal(t, 201, res.status)
+	member := memberIDOf(res)
+	h.setBodyTracking(t, tn.GymOne, true)
+	day := daysAgo(0)
+	post := func(m map[string]any) {
+		m["measured_on"] = day
+		require.Equal(t, 201, h.call(t, http.MethodPost, "/members/"+member+"/measurements", reception, m).status)
+	}
+	post(map[string]any{"weight_kg": "80.0"})
+	post(map[string]any{"height_cm": "175.0", "waist_cm": "90.0", "notes": "Segunda toma"})
+
+	// The list keeps both records; only the export merges them.
+	list := h.download(t, "/members/"+member+"/measurements", reception)
+	require.Equal(t, 200, list.status)
+	assert.Equal(t, 2, bytes.Count(list.body, []byte(`"measured_on"`)))
+
+	pdf := h.download(t, "/members/"+member+"/measurements/pdf", admin)
+	require.Equal(t, 200, pdf.status, string(pdf.body))
+	assert.True(t, bytes.HasPrefix(pdf.body, []byte("%PDF-")))
+}

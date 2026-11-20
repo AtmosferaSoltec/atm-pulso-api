@@ -11,7 +11,7 @@ It reads `members` (gym and home branch) with one SELECT; it writes nothing else
 - `GET|POST /members/{id}/measurements`, `PUT|DELETE /members/{id}/measurements/{record_id}`
 - `GET|POST /members/{id}/routines`, `PUT|DELETE /members/{id}/routines/{record_id}`
 - `GET /members/{id}/body-access-log` (admin only)
-- `GET /members/{id}/measurements/pdf`: the measurements as a designed PDF (`adapters/pdf`). It goes through the same use-case checks and the
+- `GET /members/{id}/measurements/pdf`: the measurements as a designed PDF (`adapters/pdf`). It prints one row per date: records of the same day are merged (`app.MergeByDay`: the latest non-empty value of each field wins, distinct notes are joined with " · "). It goes through the same use-case checks and the
   same audited repository read as the list (one `read`/`measurements` row), plus the member's name and document (`Cards` port, members table).
 
 `PUT` replaces the whole record. `POST` is idempotent by the client `id`. Details and field codes: docs/openapi.yaml.
