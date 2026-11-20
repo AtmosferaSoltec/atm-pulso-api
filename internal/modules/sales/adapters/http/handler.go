@@ -29,6 +29,7 @@ func (h *Handler) Routes(protected gin.IRoutes) {
 	protected.GET("/products", on, h.products)
 	protected.POST("/products", on, h.createProduct)
 	protected.PATCH("/products/:id", on, h.updateProduct)
+	protected.DELETE("/products/:id", on, h.deleteProduct)
 	protected.GET("/sales", on, h.sales)
 	protected.POST("/sales", on, h.sell)
 	protected.GET("/sales/pending", on, h.pendingBalances)
@@ -84,6 +85,18 @@ func (h *Handler) updateProduct(c *gin.Context) {
 		return
 	}
 	apierror.OK(c, product)
+}
+
+func (h *Handler) deleteProduct(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	if err := h.service.DeleteProduct(c.Request.Context(), principal(c), id); err != nil {
+		respond(c, err)
+		return
+	}
+	apierror.NoContent(c)
 }
 
 func (h *Handler) sell(c *gin.Context) {
@@ -303,6 +316,8 @@ func respond(c *gin.Context, err error) {
 		apierror.Respond(c, apierror.New(http.StatusNotFound, "PRODUCT_NOT_FOUND", "El producto ya no existe."))
 	case errors.Is(err, domain.ErrProductNameTaken):
 		apierror.Respond(c, apierror.New(http.StatusConflict, "PRODUCT_NAME_TAKEN", "Ya tienes un producto con ese nombre."))
+	case errors.Is(err, domain.ErrProductHasSales):
+		apierror.Respond(c, apierror.New(http.StatusConflict, "PRODUCT_HAS_SALES", "Este producto ya se vendió: solo puedes darlo de baja."))
 	case errors.Is(err, domain.ErrSaleNotFound):
 		apierror.Respond(c, apierror.New(http.StatusNotFound, "SALE_NOT_FOUND", "La venta ya no existe."))
 	case errors.Is(err, domain.ErrSaleNotPending):

@@ -301,6 +301,8 @@ type Repository interface {
 	// CreateProduct is idempotent by id: existed is true when the same gym already had a product with that id.
 	CreateProduct(ctx context.Context, gymID uuid.UUID, p NewProduct) (view ProductView, existed bool, err error)
 	UpdateProduct(ctx context.Context, gymID, id uuid.UUID, patch ProductPatch) (ProductView, error)
+	// DeleteProduct removes a product that was never sold: domain.ErrProductNotFound, domain.ErrProductHasSales.
+	DeleteProduct(ctx context.Context, gymID, id uuid.UUID) error
 
 	// CreateSale stores a sale with its items in one transaction; existed is true for a repeated id.
 	// domain.ValidationError (PRODUCT_INVALID, TOTAL_TOO_LARGE), domain.ErrConflict.

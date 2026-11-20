@@ -114,6 +114,32 @@ func (r *Repository) UpdateProduct(ctx context.Context, gymID, id uuid.UUID, c a
 	return oneProduct(ctx, r.pool, gymID, id)
 }
 
+// DeleteProduct removes a product with no sale items. The check runs under a row lock and the foreign key of
+// sale_items backs it up (a sale committed in between makes the delete fail at commit).
+func (r *Repository) DeleteProduct(ctx context.Context, gymID, id uuid.UUID) error {
+	err := (tx.Runner{Pool: r.pool}).Run(ctx, func(t pgx.Tx) error {
+		var sold bool
+		err := t.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM sale_items WHERE gym_id = $1 AND product_id = $2)
+			FROM products WHERE gym_id = $1 AND id = $2 FOR UPDATE`, gymID, id).Scan(&sold)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrProductNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if sold {
+			return domain.ErrProductHasSales
+		}
+		_, err = t.Exec(ctx, `DELETE FROM products WHERE gym_id = $1 AND id = $2`, gymID, id)
+		return err
+	})
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return domain.ErrProductHasSales
+	}
+	return err
+}
+
 // ---- Sales ----
 
 const saleColumns = `s.id, s.branch_id, s.sold_by, s.member_id, s.status, s.was_pending, s.method, s.total::text, s.units,

@@ -75,7 +75,16 @@ func (s *Service) CreateProduct(ctx context.Context, p auth.Principal, in Produc
 	return s.Repo.CreateProduct(ctx, p.GymID, NewProduct{ID: id, Name: name, Price: domain.FormatMoney(cents), IsActive: active, Position: position})
 }
 
-// UpdateProduct changes the fields sent (admin). Products are never deleted, only deactivated: old sales keep their photo.
+// DeleteProduct removes a product that was never sold (admin). A sold product can only be deactivated: its sales
+// point to it.
+func (s *Service) DeleteProduct(ctx context.Context, p auth.Principal, id uuid.UUID) error {
+	if err := requireAdmin(p); err != nil {
+		return err
+	}
+	return s.Repo.DeleteProduct(ctx, p.GymID, id)
+}
+
+// UpdateProduct changes the fields sent (admin). A sold product is never deleted, only deactivated.
 func (s *Service) UpdateProduct(ctx context.Context, p auth.Principal, id uuid.UUID, in ProductChanges) (ProductView, error) {
 	if err := requireAdmin(p); err != nil {
 		return ProductView{}, err

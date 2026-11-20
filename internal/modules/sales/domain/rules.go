@@ -97,8 +97,10 @@ func MergeLines(lines []Line) ([]Line, bool) {
 
 // Errors of the module; the HTTP adapter translates them.
 var (
-	ErrProductNotFound     = errors.New("product not found")
-	ErrProductNameTaken    = errors.New("product name taken")
+	ErrProductNotFound  = errors.New("product not found")
+	ErrProductNameTaken = errors.New("product name taken")
+	// ErrProductHasSales: a product that was ever sold cannot be deleted, only deactivated (its sales point to it).
+	ErrProductHasSales     = errors.New("product has sales")
 	ErrSaleNotFound        = errors.New("sale not found")
 	ErrMemberNotFound      = errors.New("member not found")
 	ErrBranchNotAccessible = errors.New("branch not accessible")

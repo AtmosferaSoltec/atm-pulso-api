@@ -16,14 +16,14 @@ sales money is **separate** from membership income. Migration 00020 renamed the 
 | | Who |
 |---|---|
 | `GET /products` (`?include_inactive=true` admin only) | admin, reception |
-| `POST /products`, `PATCH /products/{id}` | admin |
+| `POST /products`, `PATCH /products/{id}`, `DELETE /products/{id}` (only never-sold products; otherwise deactivate) | admin |
 | `POST /sales` (status `paid` or `pending`), `GET /sales` | admin, reception (reception lists its branches) |
 | `GET /sales/pending` (members with a balance), `GET /members/{id}/pending-sales`, `GET /members/{id}/sales` (history) | admin, reception |
 | `POST /sales/collections` (collect pending sales) | admin, reception (branch reachable) |
 | `GET /sales/report` | admin |
 
 ## Errors (stable codes)
-`FEATURE_DISABLED` 403, `PRODUCT_NOT_FOUND` 404, `PRODUCT_NAME_TAKEN` 409, `SALE_NOT_FOUND` 404, `SALE_NOT_PENDING` 409, `NOTHING_TO_COLLECT` 409, `MEMBER_NOT_FOUND` 404,
+`FEATURE_DISABLED` 403, `PRODUCT_NOT_FOUND` 404, `PRODUCT_NAME_TAKEN` 409, `PRODUCT_HAS_SALES` 409, `SALE_NOT_FOUND` 404, `SALE_NOT_PENDING` 409, `NOTHING_TO_COLLECT` 409, `MEMBER_NOT_FOUND` 404,
 `BRANCH_NOT_ACCESSIBLE` 403, `SCOPE_NOT_ALLOWED` 400, `CONFLICT` 409, `VALIDATION_FAILED` with field codes `PRODUCT_NAME_INVALID`, `PRODUCT_PRICE_INVALID`,
 `PRODUCT_POSITION_INVALID`, `ITEMS_INVALID`, `PRODUCT_INVALID`, `TOTAL_TOO_LARGE`, `STATUS_INVALID`, `METHOD_INVALID`, `MEMBER_REQUIRED`, `MEMBER_INVALID`, `DATE_INVALID`,
 `DATE_RANGE_INVALID`, `GROUP_BY_INVALID`, `SALE_IDS_INVALID`.

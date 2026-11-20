@@ -51,7 +51,7 @@ func TestProductsModuleOffAnswersFeatureDisabledEverywhere(t *testing.T) {
 	admin, reception := h.token(t, tn.Admin), h.token(t, tn.Receptionist)
 	id := uuid.NewString()
 	calls := []struct{ method, path string }{
-		{"GET", "/products"}, {"POST", "/products"}, {"PATCH", "/products/" + id}, {"GET", "/sales"}, {"POST", "/sales"},
+		{"GET", "/products"}, {"POST", "/products"}, {"PATCH", "/products/" + id}, {"DELETE", "/products/" + id}, {"GET", "/sales"}, {"POST", "/sales"},
 		{"GET", "/sales/pending"}, {"GET", "/sales/report"}, {"POST", "/sales/collections"}, {"GET", "/members/" + id + "/pending-sales"}, {"GET", "/members/" + id + "/sales"},
 	}
 	for _, token := range []string{admin, reception} {
@@ -517,4 +517,32 @@ func TestSalesListScopeAndReport(t *testing.T) {
 	dashAfter := h.call(t, http.MethodGet, "/dashboard", admin, nil)
 	assert.Equal(t, fmt.Sprint(paymentsBefore.body), fmt.Sprint(paymentsAfter.body))
 	assert.Equal(t, fmt.Sprint(dashBefore.body), fmt.Sprint(dashAfter.body))
+}
+
+func TestDeletingProductsOnlyWhenNeverSold(t *testing.T) {
+	h := newHarness(t)
+	tn := h.newTenant(t)
+	h.setSales(t, tn.GymOne, true)
+	h.setSales(t, tn.GymTwo, true)
+	admin, reception, adminTwo := h.token(t, tn.Admin), h.token(t, tn.Receptionist), h.token(t, tn.AdminTwo)
+	unsold := h.product(t, admin, "Barra", "5")
+	sold := h.product(t, admin, "Batido", "8")
+	pending := h.product(t, admin, "Agua", "2")
+	member := h.memberID(t, admin, tn.BranchA)
+	require.Equal(t, 201, h.sell(t, admin, map[string]any{"branch_id": tn.BranchA, "method": "cash", "items": []any{item(sold, 1)}}).status)
+	require.Equal(t, 201, h.sell(t, admin, map[string]any{"branch_id": tn.BranchA, "status": "pending", "member_id": member, "items": []any{item(pending, 1)}}).status)
+
+	assert.Equal(t, 403, h.call(t, http.MethodDelete, "/products/"+unsold, reception, nil).status, "admins only")
+	assert.Equal(t, 404, h.call(t, http.MethodDelete, "/products/"+unsold, adminTwo, nil).status, "a product of another gym is not found")
+	for _, id := range []string{sold, pending} {
+		res := h.call(t, http.MethodDelete, "/products/"+id, admin, nil)
+		assert.Equal(t, 409, res.status, res.body)
+		assert.Equal(t, "PRODUCT_HAS_SALES", res.errorCode())
+	}
+	assert.Equal(t, 204, h.call(t, http.MethodDelete, "/products/"+unsold, admin, nil).status)
+	assert.Equal(t, 404, h.call(t, http.MethodDelete, "/products/"+unsold, admin, nil).status)
+
+	list := h.call(t, http.MethodGet, "/products?include_inactive=true", admin, nil).body["data"].([]any)
+	assert.Len(t, list, 2, "the sold products stay")
+	assert.Equal(t, 200, h.call(t, http.MethodGet, "/sales", admin, nil).status, "old sales still read")
 }

@@ -926,7 +926,7 @@ paths:
     patch:
       tags: [sales]
       summary: Edit, reorder or deactivate a product (admin).
-      description: Only the fields sent change. A product is never deleted (old sales keep their own photo of name and price); deactivate it with `is_active` false.
+      description: Only the fields sent change. Deactivate a product ("dar de baja") with `is_active` false; a sold product can never be deleted.
       security: [{ bearer: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -938,6 +938,21 @@ paths:
       responses:
         "200": { description: The product., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Product" } } } } } }
         "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "404": { $ref: "#/components/responses/ApiError" }
+        "409": { $ref: "#/components/responses/ApiError" }
+    delete:
+      tags: [sales]
+      summary: Delete a product that was never sold (admin).
+      description: |
+        Only for products with no sales. A product that was sold (even once, even pending) answers 409 `PRODUCT_HAS_SALES`:
+        deactivate it instead with `PATCH` `is_active` false.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Deleted. }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ApiError" }
         "404": { $ref: "#/components/responses/ApiError" }
