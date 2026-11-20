@@ -234,3 +234,32 @@ func TestDayPassNumbersAreGaplessUnderConcurrency(t *testing.T) {
 	sort.Strings(numbers)
 	assert.Equal(t, want, numbers)
 }
+
+func TestAccessHistoryCarriesTheAnsweredDate(t *testing.T) {
+	h := newHarness(t)
+	tn := h.newTenant(t)
+	admin := h.token(t, tn.Admin)
+	today := limaToday()
+	valid := h.memberWith(t, admin, tn.BranchA, today, 3, nil)
+	expired := h.memberWith(t, admin, tn.BranchA, today.AddDate(0, -6, 0), 1, nil)
+	future := h.memberWith(t, admin, tn.BranchA, today.AddDate(0, 0, 10), 1, nil)
+	stranger := uniqueDocument()
+	want := map[string]any{}
+	for _, document := range []string{valid, expired, future, stranger} {
+		res := h.check(t, admin, tn.BranchA, document)
+		require.Equal(t, 200, res.status, res.body)
+		want[document] = res.data()["ends_on"]
+	}
+	assert.Nil(t, want[stranger])
+	assert.Equal(t, iso(today.AddDate(0, 0, 10)), want[future], "not started: the start date")
+
+	res := h.call(t, http.MethodGet, "/access/events", admin, nil)
+	require.Equal(t, 200, res.status, res.body)
+	events := res.body["data"].([]any)
+	require.Len(t, events, 4)
+	for _, e := range events {
+		event := e.(map[string]any)
+		require.Contains(t, event, "ends_on")
+		assert.Equal(t, want[event["document_number"].(string)], event["ends_on"], event["reason"])
+	}
+}

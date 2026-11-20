@@ -250,6 +250,8 @@ type EventView struct {
 	DisplayName    string     `json:"display_name"`
 	DocumentNumber *string    `json:"document_number"`
 	MemberID       *uuid.UUID `json:"member_id"`
+	// EndsOn is the date the check answered (see domain.Decision.EndsOn), as YYYY-MM-DD.
+	EndsOn *string `json:"ends_on"`
 }
 
 // NamedID is an id with a name.

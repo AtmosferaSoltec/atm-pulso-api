@@ -2235,7 +2235,7 @@ components:
         checked_at: { type: string, format: date-time, description: Server time. }
     AccessEvent:
       type: object
-      required: [id, checked_at, branch, kind, allowed, reason, display_name, document_number, member_id]
+      required: [id, checked_at, branch, kind, allowed, reason, display_name, document_number, member_id, ends_on]
       properties:
         id: { type: string, format: uuid }
         checked_at: { type: string, format: date-time }
@@ -2251,6 +2251,10 @@ components:
         display_name: { type: string }
         document_number: { type: [string, "null"] }
         member_id: { type: [string, "null"], format: uuid }
+        ends_on:
+          type: [string, "null"]
+          format: date
+          description: The date the check answered, as on the check itself. End of the membership for MEMBERSHIP_VALID, BRANCH_NOT_ALLOWED and MEMBERSHIP_EXPIRED; start date for MEMBERSHIP_NOT_STARTED; null otherwise.
     DayPass:
       type: object
       required: [id, receipt, branch, amount, method, visitor_name, created_at]

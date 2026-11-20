@@ -129,7 +129,7 @@ func (r *Repository) Events(ctx context.Context, gymID uuid.UUID, f app.EventFil
 	if err := r.pool.QueryRow(ctx, `SELECT count(*) `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := r.pool.Query(ctx, `SELECT e.id, e.checked_at, b.id, b.name, e.kind, e.allowed, e.reason_code, e.display_name, e.document_number, e.member_id `+
+	rows, err := r.pool.Query(ctx, `SELECT e.id, e.checked_at, b.id, b.name, e.kind, e.allowed, e.reason_code, e.display_name, e.document_number, e.member_id, to_char(e.ends_on, 'YYYY-MM-DD') `+
 		where+` ORDER BY e.checked_at DESC, e.id DESC LIMIT $7 OFFSET $8`, append(args, f.PageSize, (f.Page-1)*f.PageSize)...)
 	if err != nil {
 		return nil, 0, err
@@ -138,7 +138,7 @@ func (r *Repository) Events(ctx context.Context, gymID uuid.UUID, f app.EventFil
 	out := []app.EventView{}
 	for rows.Next() {
 		var v app.EventView
-		if err := rows.Scan(&v.ID, &v.CheckedAt, &v.Branch.ID, &v.Branch.Name, &v.Kind, &v.Allowed, &v.Reason, &v.DisplayName, &v.DocumentNumber, &v.MemberID); err != nil {
+		if err := rows.Scan(&v.ID, &v.CheckedAt, &v.Branch.ID, &v.Branch.Name, &v.Kind, &v.Allowed, &v.Reason, &v.DisplayName, &v.DocumentNumber, &v.MemberID, &v.EndsOn); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, v)
