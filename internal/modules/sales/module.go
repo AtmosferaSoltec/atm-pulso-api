@@ -20,6 +20,8 @@ type Deps struct {
 	Clock clock.Clock
 	// Brands gives the letterhead of the PDF downloads; nil draws Pulso's.
 	Brands export.BrandSource
+	// Vouchers counts the proofs of payment of sales (the vouchers module); nil shows voucher_count 0.
+	Vouchers app.Vouchers
 }
 
 // Module is the assembled sales module.
@@ -30,7 +32,7 @@ type Module struct {
 
 // New wires repository, directories, use cases and HTTP by hand.
 func New(deps Deps) *Module {
-	service := &app.Service{Repo: postgres.NewRepository(deps.Pool), Directory: branchdir.New(deps.Pool), People: peopledir.New(deps.Pool), Clock: deps.Clock}
+	service := &app.Service{Repo: postgres.NewRepository(deps.Pool), Directory: branchdir.New(deps.Pool), People: peopledir.New(deps.Pool), Clock: deps.Clock, Vouchers: deps.Vouchers}
 	return &Module{handler: saleshttp.NewHandler(service), exports: saleshttp.NewExportHandler(service, deps.Brands)}
 }
 

@@ -31,6 +31,12 @@ type People interface {
 	Users(ctx context.Context, gymID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]peopledir.Person, error)
 }
 
+// Vouchers counts the proofs of payment (vouchers) of sales and collections. They belong to the vouchers
+// module; main.go wires it. Nil means no counts (every voucher_count is 0).
+type Vouchers interface {
+	SaleVoucherCounts(ctx context.Context, gymID uuid.UUID, saleIDs, collectionIDs []uuid.UUID) (bySale, byCollection map[uuid.UUID]int, err error)
+}
+
 // ProductView is a product of the catalog.
 type ProductView struct {
 	ID         uuid.UUID    `json:"id"`
@@ -203,6 +209,10 @@ type SaleView struct {
 	CollectionID *uuid.UUID     `json:"collection_id"`
 	CollectedAt  *string        `json:"collected_at"`
 	Items        []SaleItemView `json:"items"`
+	// VoucherCount is how many proofs of payment prove the money of the sale: its own when it was paid on the
+	// spot (GET /sales/{id}/vouchers), its collection's when it was collected later
+	// (GET /sales/collections/{collection_id}/vouchers), 0 while pending.
+	VoucherCount int `json:"voucher_count"`
 }
 
 // PendingBalance is what a member owes: the sum of their open pending sales.

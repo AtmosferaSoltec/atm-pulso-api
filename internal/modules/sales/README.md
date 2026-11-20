@@ -10,6 +10,7 @@ sales money is **separate** from membership income. Migration 00020 renamed the 
 
 ## Ports
 - `Repository` (postgres adapter): all SQL, one transaction per sale and per collection.
+- `Vouchers` (optional): counts of the proofs of payment of sales and collections, from the vouchers module (wired in `main.go`), for `voucher_count`.
 - `Directory` = `platform/branchdir` (branches, and whether a gym exists for the admin routes) and `People` = `platform/peopledir` (member existence and names, staff names): read-only SELECTs, no imports of other modules.
 
 ## Endpoints (all behind `RequireFeature(sales)` -> `403 FEATURE_DISABLED`)
@@ -24,7 +25,11 @@ sales money is **separate** from membership income. Migration 00020 renamed the 
 | `GET /sales/pending` (members with a balance), `GET /members/{id}/pending-sales`, `GET /members/{id}/sales` (history) | admin, reception |
 | `POST /sales/collections` (collect pending sales) | admin, reception (branch reachable) |
 | `GET /sales/report` | admin |
+| `GET`/`POST /sales/{id}/vouchers`, `GET`/`POST /sales/collections/{id}/vouchers` (served by the **vouchers** module, same guard) | admin, reception (branch reachable) |
 | `GET /sales/export?format=csv\|xlsx\|pdf` (the report's period and branch, one row per sale, up to 10,000: `413 EXPORT_TOO_LARGE`) | admin |
+
+Sale rows (`GET /sales`, `/members/{id}/sales`, `/members/{id}/pending-sales`, `POST /sales`) carry `voucher_count`: the proofs of the sale paid on the spot,
+or of its collection when it was collected later; 0 while pending.
 
 ## Errors (stable codes)
 `FEATURE_DISABLED` 403, `PRODUCT_NOT_FOUND` 404, `PRODUCT_NAME_TAKEN` 409, `PRODUCT_HAS_SALES` 409, `CATEGORY_NOT_FOUND` 404, `CATEGORY_NAME_TAKEN` 409, `SALE_NOT_FOUND` 404, `SALE_NOT_PENDING` 409, `NOTHING_TO_COLLECT` 409, `MEMBER_NOT_FOUND` 404,

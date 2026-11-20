@@ -20,6 +20,8 @@ type Service struct {
 	Directory Directory
 	People    People
 	Clock     clock.Clock
+	// Vouchers is optional: without it voucher_count is always 0.
+	Vouchers Vouchers
 }
 
 func (s *Service) today() time.Time { return clock.LimaDate(s.Clock.Now()) }
@@ -384,6 +386,10 @@ func (s *Service) views(ctx context.Context, gymID uuid.UUID, recs []SaleRecord)
 	if err != nil {
 		return nil, err
 	}
+	bySale, byCollection, err := s.voucherCounts(ctx, gymID, recs)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]SaleView, 0, len(recs))
 	for _, r := range recs {
 		v := SaleView{ID: r.ID, Branch: BranchRef{ID: r.BranchID, Name: branchName[r.BranchID]}, Status: r.Status, WasPending: r.WasPending,
@@ -397,12 +403,37 @@ func (s *Service) views(ctx context.Context, gymID uuid.UUID, recs []SaleRecord)
 			at := r.CollectedAt.UTC().Format(time.RFC3339)
 			v.CollectedAt = &at
 		}
+		if r.CollectionID != nil {
+			v.VoucherCount = byCollection[*r.CollectionID]
+		} else {
+			v.VoucherCount = bySale[r.ID]
+		}
 		if v.Items == nil {
 			v.Items = []SaleItemView{}
 		}
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// voucherCounts asks the vouchers module how many proofs the sales (paid on the spot) and the collections have.
+func (s *Service) voucherCounts(ctx context.Context, gymID uuid.UUID, recs []SaleRecord) (bySale, byCollection map[uuid.UUID]int, err error) {
+	if s.Vouchers == nil {
+		return map[uuid.UUID]int{}, map[uuid.UUID]int{}, nil
+	}
+	var saleIDs, collectionIDs []uuid.UUID
+	for _, r := range recs {
+		switch {
+		case r.CollectionID != nil:
+			collectionIDs = append(collectionIDs, *r.CollectionID)
+		case r.Status == domain.StatusPaid:
+			saleIDs = append(saleIDs, r.ID)
+		}
+	}
+	if len(saleIDs) == 0 && len(collectionIDs) == 0 {
+		return map[uuid.UUID]int{}, map[uuid.UUID]int{}, nil
+	}
+	return s.Vouchers.SaleVoucherCounts(ctx, gymID, saleIDs, collectionIDs)
 }
 
 // MemberSales is the purchase history of a member (paid and pending), newest first, from every branch of the gym.

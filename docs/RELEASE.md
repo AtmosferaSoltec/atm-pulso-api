@@ -96,3 +96,16 @@ Before deploying: system `pulso` with roles `admin`/`receptionist` in the consol
 - New endpoints: `DELETE /products/{id}` (409 `PRODUCT_HAS_SALES` for sold products), `/product-categories`,
   `/admin/gyms/{gym_id}/product-categories`. `GET /members?status=expiring` lists the soonest end first. Access
   history rows carry `ends_on`.
+
+## Vouchers of product sales (migration 00025)
+
+- `00025_vouchers_sale_vouchers`: new table `sale_vouchers` (owned by the vouchers module) for the proofs of payment
+  of product sales: exactly one of `sale_id` (a sale paid on the spot) or `collection_id` (a collection of pending
+  sales), composite FKs `(sale_id, gym_id)`, `(collection_id, gym_id)` and `(uploaded_by, gym_id)`. Purely additive:
+  no existing row or column changes; the `down` drops the table. Files go to the same private R2 bucket under
+  `vouchers/<gym>/sales/<sale>/` and `vouchers/<gym>/collections/<collection>/`; no new environment variable.
+- New endpoints (behind the `sales` module): `GET`/`POST /sales/{id}/vouchers`, `GET`/`POST /sales/collections/{id}/vouchers`.
+  `GET /vouchers/{id}/file` now serves these too. Sales rows (`GET /sales`, member history and pending lists) carry
+  `voucher_count`. New error codes: `VOUCHER_SALE_NOT_PAID` (409), `VOUCHER_SALE_COLLECTED` (409).
+- The new upload paths get the same 10 MB body limit as `/receipts/{id}/vouchers` (wired from `vouchers.BodyLimits`);
+  the host nginx must allow those bodies there as it already does for the receipts' uploads.

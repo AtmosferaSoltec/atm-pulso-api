@@ -33,7 +33,6 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/sales"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers"
-	vouchersdomain "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers/domain"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/gymbrand"
@@ -68,7 +67,7 @@ func newHarness(t *testing.T) harness {
 		sink = os.Stderr
 	}
 	quiet := slog.New(slog.NewTextHandler(sink, nil))
-	router, api, err := httpserver.NewRouter(httpserver.Options{Logger: quiet, RateLimitPerMinute: 100_000, BodyLimits: map[string]int64{"POST " + httpserver.APIPrefix + "/receipts/:id/vouchers": vouchersdomain.MaxBytes + 1}})
+	router, api, err := httpserver.NewRouter(httpserver.Options{Logger: quiet, RateLimitPerMinute: 100_000, BodyLimits: vouchers.BodyLimits(httpserver.APIPrefix)})
 	require.NoError(t, err)
 
 	health.Register(api, pool)
@@ -91,9 +90,10 @@ func newHarness(t *testing.T) harness {
 	membersModule.Routes(protected)
 	membersModule.ExportRoutes(protected, heavy)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
-	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected)
+	vouchersModule := vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore})
+	vouchersModule.Routes(protected)
 	kiosk.New(kiosk.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
-	salesModule := sales.New(sales.Deps{Pool: pool, Clock: clock.System{}, Brands: brands})
+	salesModule := sales.New(sales.Deps{Pool: pool, Clock: clock.System{}, Brands: brands, Vouchers: vouchersModule})
 	salesModule.Routes(protected)
 	salesModule.AdminRoutes(adminRoutes)
 	salesModule.ExportRoutes(protected, heavy)

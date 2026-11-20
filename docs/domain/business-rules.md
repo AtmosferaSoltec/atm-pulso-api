@@ -267,6 +267,8 @@ It is **a count of units sold and of what members still have to pay**, not accou
 - **Roles**: admin and reception register sales and collect. Reception lists sales only of its branches; balances and a member's history are the gym's. Only the admin manages the catalog and reads the report.
 - **Report** (admin, `/sales/report`): units and money by product and by day/month, filtered by Lima dates and branch. `total_sold` (all sales), `collected_total` (paid, including pending sales collected since)
   and `pending_total` (still pending). **Separate from membership income**: product sales never appear in `payments`, the CSV export or the dashboard (a test guards it).
+- **Proofs of payment** (module `vouchers`): optional photos/PDFs of the transfer, Yape/Plin or card receipt, up to five for a sale paid on the spot or for a
+  collection (never for cash, never for an open pending sale: the proof of a collected sale goes on its collection). Immutable, like the payments' vouchers.
 - Not included (open): voiding a wrong sale, limits on what a member can owe, stock.
 
 ## 12. Day pass (*pase del día*)  (`features/dayPasses`)

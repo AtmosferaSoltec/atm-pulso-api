@@ -34,7 +34,6 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers"
 	vouchersstorage "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers/adapters/storage"
 	vouchersapp "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers/app"
-	vouchersdomain "github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/vouchers/domain"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/config"
@@ -100,9 +99,7 @@ func run() int {
 		Logger:             log,
 		CORSOrigins:        cfg.CORSOrigins,
 		RateLimitPerMinute: cfg.RateLimitPerMinute,
-		BodyLimits: map[string]int64{
-			"POST " + httpserver.APIPrefix + "/receipts/:id/vouchers": vouchersdomain.MaxBytes + 1,
-		},
+		BodyLimits:         vouchers.BodyLimits(httpserver.APIPrefix),
 	})
 	if err != nil {
 		log.Error("router", "error", err)
@@ -162,9 +159,10 @@ func run() int {
 	membersModule.Routes(protected)
 	membersModule.ExportRoutes(protected, heavy)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
-	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected)
+	vouchersModule := vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore})
+	vouchersModule.Routes(protected)
 	kiosk.New(kiosk.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
-	salesModule := sales.New(sales.Deps{Pool: pool, Clock: clock.System{}, Brands: brands})
+	salesModule := sales.New(sales.Deps{Pool: pool, Clock: clock.System{}, Brands: brands, Vouchers: vouchersModule})
 	salesModule.Routes(protected)
 	salesModule.AdminRoutes(adminRoutes)
 	salesModule.ExportRoutes(protected, heavy)

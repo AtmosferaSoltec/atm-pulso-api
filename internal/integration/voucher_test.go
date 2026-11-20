@@ -63,10 +63,16 @@ func (m *memoryVouchers) count() int {
 	return len(m.objects)
 }
 
-// post sends a file as the raw body, like the web does.
+// postVoucher sends a file as the raw body, like the web does.
 func (h harness) postVoucher(t *testing.T, token, receipt string, body []byte) response {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, httpserver.APIPrefix+"/receipts/"+receipt+"/vouchers", bytes.NewReader(body))
+	return h.postFile(t, token, "/receipts/"+receipt+"/vouchers", body)
+}
+
+// postFile sends a file as the raw body to path (under the API prefix).
+func (h harness) postFile(t *testing.T, token, path string, body []byte) response {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, httpserver.APIPrefix+path, bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	h.router.ServeHTTP(rec, req)

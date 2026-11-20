@@ -1350,13 +1350,152 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+  /sales/{id}/vouchers:
+    get:
+      tags: [vouchers]
+      summary: List the proofs of payment of a product sale paid on the spot.
+      description: |
+        Oldest first. Same reach as the branch of the sale. Needs the gym's `sales` module (403 FEATURE_DISABLED).
+        A pending sale, and a sale collected later (its proofs belong to its collection), list none.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: The sale id. }
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Voucher" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "404": { $ref: "#/components/responses/ApiError" }
+    post:
+      tags: [vouchers]
+      summary: Attach a proof of payment (photo or PDF) to a product sale paid on the spot.
+      description: |
+        Same rules as the payments' vouchers: optional and never for cash; the body is the file itself (not JSON): PNG, JPEG, WebP or PDF,
+        at most 10 MB, checked by its content. Up to 5 per sale; immutable (no edit, no delete). Needs access to the sale's branch and the
+        gym's `sales` module (403 FEATURE_DISABLED). The file is read with `GET /vouchers/{id}/file`.
+        Answers 503 STORAGE_UNAVAILABLE when no object store is configured.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: The sale id. }
+      requestBody:
+        required: true
+        content:
+          image/png: { schema: { type: string, format: binary } }
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+          application/pdf: { schema: { type: string, format: binary } }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Voucher" }
+        "400":
+          description: VALIDATION_FAILED with VOUCHER_NOT_FOR_CASH (field `sale`), VOUCHER_TYPE_INVALID or VOUCHER_SIZE_INVALID (field `voucher`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "404": { $ref: "#/components/responses/ApiError" }
+        "409":
+          description: "VOUCHER_LIMIT_REACHED; VOUCHER_SALE_NOT_PAID (the sale is still pending, there is no money yet); VOUCHER_SALE_COLLECTED (the sale was paid later by a collection, attach the proof to `/sales/collections/{collection_id}/vouchers`)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: STORAGE_UNAVAILABLE.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /sales/collections/{id}/vouchers:
+    get:
+      tags: [vouchers]
+      summary: List the proofs of payment of a collection of pending sales.
+      description: |
+        Oldest first. Same reach as the branch of the collection. Needs the gym's `sales` module (403 FEATURE_DISABLED).
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: The collection id. }
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Voucher" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "404": { $ref: "#/components/responses/ApiError" }
+    post:
+      tags: [vouchers]
+      summary: Attach a proof of payment (photo or PDF) to a collection of pending sales.
+      description: |
+        Same rules as the payments' vouchers: optional and never for cash; the body is the file itself (not JSON): PNG, JPEG, WebP or PDF,
+        at most 10 MB, checked by its content. Up to 5 per collection; immutable (no edit, no delete). Needs access to the collection's branch and the
+        gym's `sales` module (403 FEATURE_DISABLED). The file is read with `GET /vouchers/{id}/file`.
+        Answers 503 STORAGE_UNAVAILABLE when no object store is configured.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: The collection id. }
+      requestBody:
+        required: true
+        content:
+          image/png: { schema: { type: string, format: binary } }
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+          application/pdf: { schema: { type: string, format: binary } }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Voucher" }
+        "400":
+          description: VALIDATION_FAILED with VOUCHER_NOT_FOR_CASH (field `collection`), VOUCHER_TYPE_INVALID or VOUCHER_SIZE_INVALID (field `voucher`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "404": { $ref: "#/components/responses/ApiError" }
+        "409":
+          description: VOUCHER_LIMIT_REACHED.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: STORAGE_UNAVAILABLE.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /vouchers/{id}/file:
     get:
       tags: [vouchers]
       summary: Download a voucher's file.
       description: |
-        Private: only with a valid token and within the reach of the payment's branch. The web fetches it with the token and shows
-        it from the received bytes (an `<img src>` cannot send the token). The answer is cacheable only by the browser (`private`).
+        Any voucher: of a receipt's payment, of a product sale or of a collection of pending sales. Private: only with a valid token and
+        within the reach of the branch where that money was received. The vouchers of product sales also need the gym's `sales` module
+        (403 FEATURE_DISABLED). The web fetches it with the token and shows it from the received bytes (an `<img src>` cannot send the token).
+        The answer is cacheable only by the browser (`private`).
       security: [{ bearer: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: The voucher id. }
@@ -1369,6 +1508,7 @@ paths:
             image/webp: { schema: { type: string, format: binary } }
             application/pdf: { schema: { type: string, format: binary } }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
         "404": { $ref: "#/components/responses/ApiError" }
         "503":
           description: STORAGE_UNAVAILABLE.
@@ -2253,7 +2393,7 @@ components:
               quantity: { type: integer, minimum: 1, maximum: 99 }
     ProductSale:
       type: object
-      required: [id, branch, status, was_pending, method, total, units, sold_at, sold_on, sold_by, member, collection_id, collected_at, items]
+      required: [id, branch, status, was_pending, method, total, units, sold_at, sold_on, sold_by, member, collection_id, collected_at, items, voucher_count]
       properties:
         id: { type: string, format: uuid }
         branch:
@@ -2288,6 +2428,11 @@ components:
               quantity: { type: integer }
               unit_price: { type: string, example: "8.00" }
               line_total: { type: string, example: "24.00" }
+        voucher_count:
+          type: integer
+          description: |
+            Proofs of payment backing the money of the sale: its own when paid on the spot (`GET /sales/{id}/vouchers`), its collection's when
+            it was collected later (`collection_id` set: `GET /sales/collections/{collection_id}/vouchers`), 0 while pending.
     SaleMember:
       type: object
       required: [id, full_name, document_number]
