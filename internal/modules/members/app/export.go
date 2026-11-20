@@ -10,6 +10,9 @@ import (
 // MaxExportRows is the largest member list the downloads produce.
 const MaxExportRows = 10_000
 
+// ErrForbidden: only an admin downloads the member directory.
+var ErrForbidden = errors.New("forbidden")
+
 // ErrExportTooLarge: the filter matches more than MaxExportRows members.
 var ErrExportTooLarge = errors.New("export too large")
 
@@ -21,9 +24,12 @@ type MemberExport struct {
 	HomeBranchName string
 }
 
-// Export returns every member of the filter (no pagination). It follows the rules of the list: the directory
-// is the gym's, so admin and reception may download what they may list.
+// Export returns every member of the filter (no pagination). Admin only: reception may list the directory on
+// screen but not take it away in bulk.
 func (s *Service) Export(ctx context.Context, p auth.Principal, f Filter) (MemberExport, error) {
+	if p.Role != auth.RoleAdmin {
+		return MemberExport{}, ErrForbidden
+	}
 	f.Page, f.PageSize = 1, MaxExportRows+1
 	result, err := s.Repo.List(ctx, p.GymID, f, s.today())
 	if err != nil {

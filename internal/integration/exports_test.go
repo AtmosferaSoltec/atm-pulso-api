@@ -214,15 +214,20 @@ func TestMemberDownloadsFollowTheListRules(t *testing.T) {
 	future["full_name"], future["starts_on"] = "Futuro Socio", iso(limaToday().AddDate(0, 0, 10))
 	require.Equal(t, 201, h.enroll(t, admin, future).status)
 
-	// Admin and reception may list the directory, so both may download it.
+	// Only the admin downloads the directory; reception lists it on screen but gets 403 here, in every format.
 	rows := assertDownloads(t, h, "/members/export", admin, "miembros")
 	require.Len(t, rows, 5)
 	assert.Equal(t, []string{"Tipo de documento", "Documento", "Nombre", "Teléfono", "Sede", "Estado", "Plan", "Inicio", "Fin",
 		"Días restantes", "Última boleta"}, rows[0])
-	assertDownloads(t, h, "/members/export?status=active", reception, "miembros")
+	assertDownloads(t, h, "/members/export?status=active", admin, "miembros")
+	for _, f := range exportFormats {
+		denied := h.call(t, http.MethodGet, "/members/export?format="+f.format, reception, nil)
+		assert.Equal(t, 403, denied.status, f.format)
+		assert.Equal(t, "FORBIDDEN", denied.errorCode(), f.format)
+	}
 
 	// The filters of the list apply: status, search and home branch.
-	scheduled := table(t, "csv", h.download(t, "/members/export?status=scheduled", reception).body)
+	scheduled := table(t, "csv", h.download(t, "/members/export?status=scheduled", admin).body)
 	require.Len(t, scheduled, 2)
 	assert.Equal(t, "Futuro Socio", scheduled[1][2])
 	assert.Equal(t, "Por iniciar", scheduled[1][5])

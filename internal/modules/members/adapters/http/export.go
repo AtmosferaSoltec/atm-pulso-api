@@ -75,6 +75,9 @@ func (h *ExportHandler) export(c *gin.Context) {
 	p, _ := auth.FromContext(c.Request.Context())
 	data, err := h.service.Export(c.Request.Context(), p, filter)
 	switch {
+	case errors.Is(err, app.ErrForbidden):
+		apierror.Respond(c, apierror.ErrForbidden)
+		return
 	case errors.Is(err, app.ErrExportTooLarge):
 		apierror.Respond(c, apierror.New(http.StatusRequestEntityTooLarge, "EXPORT_TOO_LARGE", "Hay demasiados miembros para descargar. Usa un filtro."))
 		return

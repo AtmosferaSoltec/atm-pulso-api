@@ -726,7 +726,7 @@ paths:
       tags: [members]
       summary: Download the member directory as CSV, Excel or PDF.
       description: |
-        Same rules and filters as `GET /members` (every role of the gym may list the directory, so both may download it), no pagination.
+        Admin only (reception gets 403, like the other downloads). Same filters as `GET /members`, no pagination.
         Columns (the same in CSV and Excel): Tipo de documento, Documento, Nombre, Teléfono, Sede, Estado, Plan, Inicio, Fin, Días restantes,
         Última boleta. The PDF adds the counts per status. More than 10,000 members is 413 EXPORT_TOO_LARGE; a `home_branch_id` that is not
         a branch of the gym is 400 `BRANCH_INVALID`. File name `miembros-YYYY-MM-DD.<ext>`.
