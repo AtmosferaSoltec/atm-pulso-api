@@ -2602,7 +2602,7 @@ components:
         occurred_at: { type: string, format: date-time }
   responses:
     Download:
-      description: The file, as an attachment (`Content-Disposition`) with `Cache-Control: no-store`.
+      description: "The file, as an attachment (`Content-Disposition`) with `Cache-Control: no-store`."
       content:
         text/csv:
           schema: { type: string }
