@@ -166,7 +166,9 @@ func run() int {
 	salesModule := sales.New(sales.Deps{Pool: pool, Clock: clock.System{}, Brands: brands})
 	salesModule.Routes(protected)
 	salesModule.ExportRoutes(protected, heavy)
-	bodytracking.New(bodytracking.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	bodyModule := bodytracking.New(bodytracking.Deps{Pool: pool, Clock: clock.System{}, Brands: brands})
+	bodyModule.Routes(protected)
+	bodyModule.ExportRoutes(protected, heavy)
 	// The downloads (CSV, Excel, PDF) are heavy: they share the tighter per-IP limit.
 	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}, Brands: brands}).Routes(protected, heavy)
 

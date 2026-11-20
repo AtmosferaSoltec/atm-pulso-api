@@ -1519,6 +1519,28 @@ paths:
         "409": { $ref: "#/components/responses/ApiError" }
         "429": { $ref: "#/components/responses/ApiError" }
 
+  /members/{id}/measurements/pdf:
+    get:
+      tags: [body_tracking]
+      summary: PDF of a member's measurements and progress (admin and reception).
+      description: |
+        SENSITIVE health data. Exactly the same checks as `GET /members/{id}/measurements`: the `body_tracking` module (403 `FEATURE_DISABLED`),
+        the member in the token's gym (404 `MEMBER_NOT_FOUND`), the receptionist's access to the home branch (403 `BRANCH_NOT_ACCESSIBLE`),
+        and the same access-log row (`read`, `measurements`). Content: the gym letterhead, the member's name and document, the latest value of
+        each measure with its change since the first one, the weight over time, every measurement and the notes. A4 portrait,
+        "Página X de Y". File name `medidas-<member-name>-YYYY-MM-DD.pdf`.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The PDF.
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "404": { $ref: "#/components/responses/ApiError" }
   /members/{id}/measurements:
     get:
       tags: [body_tracking]

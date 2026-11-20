@@ -95,7 +95,9 @@ func newHarness(t *testing.T) harness {
 	salesModule := sales.New(sales.Deps{Pool: pool, Clock: clock.System{}, Brands: brands})
 	salesModule.Routes(protected)
 	salesModule.ExportRoutes(protected, heavy)
-	bodytracking.New(bodytracking.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	bodyModule := bodytracking.New(bodytracking.Deps{Pool: pool, Clock: clock.System{}, Brands: brands})
+	bodyModule.Routes(protected)
+	bodyModule.ExportRoutes(protected, heavy)
 	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}, Brands: brands}).Routes(protected, heavy)
 	return harness{router: router, pool: pool, vouchers: voucherStore, auth: authFake, storage: storageFake, people: &sync.Map{}, tokens: tokens}
 }

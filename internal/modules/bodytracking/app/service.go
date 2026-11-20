@@ -18,7 +18,9 @@ const MaxAccessLog = 200
 
 // Service implements the use cases. The module switch (FEATURE_DISABLED) is a route guard, not here.
 type Service struct {
-	Repo  Repository
+	Repo Repository
+	// Cards identifies the member on the PDF.
+	Cards Cards
 	Clock clock.Clock
 }
 

@@ -281,3 +281,77 @@ func TestSalesDownloadsAreAdminOnlyAndBehindTheModule(t *testing.T) {
 	assert.Equal(t, 400, h.call(t, http.MethodGet, "/sales/export?from=2026-13-01", admin, nil).status)
 	assert.Equal(t, 400, h.call(t, http.MethodGet, "/sales/export?format=txt", admin, nil).status)
 }
+
+func TestMeasurementsPDFIsGuardedAndAuditedLikeTheReads(t *testing.T) {
+	h := newHarness(t)
+	tn := h.newTenant(t)
+	admin, reception, adminTwo := h.token(t, tn.Admin), h.token(t, tn.Receptionist), h.token(t, tn.AdminTwo)
+	body := enrollBody(tn.BranchA, uniqueDocument())
+	body["full_name"] = "José Ñañez Peña"
+	res := h.enroll(t, admin, body)
+	require.Equal(t, 201, res.status)
+	member := memberIDOf(res)
+	path := "/members/" + member + "/measurements/pdf"
+
+	// Module off: refused, nothing logged.
+	off := h.call(t, http.MethodGet, path, admin, nil)
+	assert.Equal(t, 403, off.status)
+	assert.Equal(t, "FEATURE_DISABLED", off.errorCode())
+	assert.Empty(t, h.auditRows(t, member))
+
+	h.setBodyTracking(t, tn.GymOne, true)
+	// An empty history still makes a PDF (and the read is logged).
+	empty := h.download(t, path, admin)
+	require.Equal(t, 200, empty.status, string(empty.body))
+	keepSample(t, "medidas-vacio.pdf", empty.body)
+
+	weights := []struct {
+		day                       int
+		weight, fat, waist, chest string
+		notes                     string
+	}{
+		{150, "84.6", "24.1", "96.0", "104.0", "Inicio del plan. Objetivo: bajar 8 kg sin perder fuerza."},
+		{120, "83.1", "23.4", "94.5", "103.5", ""},
+		{90, "81.9", "22.6", "92.0", "103.0", "Subió la carga en sentadilla; dieta con más proteína."},
+		{60, "80.4", "21.5", "90.5", "102.0", ""},
+		{30, "79.8", "20.9", "89.0", "101.5", "Molestia leve en la rodilla izquierda: bajar impacto dos semanas."},
+		{0, "78.2", "20.1", "87.5", "101.0", "Muy buen avance. Mantener rutina y revisar en un mes."},
+	}
+	for _, w := range weights {
+		m := map[string]any{"measured_on": daysAgo(w.day), "weight_kg": w.weight, "body_fat_pct": w.fat, "waist_cm": w.waist, "chest_cm": w.chest, "notes": w.notes}
+		if w.day == 150 {
+			m["height_cm"], m["hip_cm"] = "176.0", "101.0"
+		}
+		require.Equal(t, 201, h.call(t, http.MethodPost, "/members/"+member+"/measurements", reception, m).status)
+	}
+	before := len(h.auditRows(t, member))
+
+	pdf := h.download(t, path, admin)
+	require.Equal(t, 200, pdf.status, string(pdf.body))
+	assert.Equal(t, "application/pdf", pdf.contentType)
+	assert.Equal(t, `attachment; filename="medidas-jose-nanez-pena-`+today()+`.pdf"`, pdf.disposition)
+	assert.True(t, bytes.HasPrefix(pdf.body, []byte("%PDF-")))
+	keepSample(t, "medidas.pdf", pdf.body)
+	rows := h.auditRows(t, member)
+	require.Len(t, rows, before+1, "the PDF is one audited read")
+	assert.Equal(t, "read:measurements:false", rows[len(rows)-1])
+
+	// Reception with access to the member's branch may download it too (and it is logged).
+	require.Equal(t, 200, h.download(t, path, reception).status)
+	assert.Len(t, h.auditRows(t, member), before+2)
+
+	// Refusals are the same as the reads and leave no trace.
+	far := h.bodyMember(t, admin, h.extraBranch(t, tn))
+	denied := h.call(t, http.MethodGet, "/members/"+far+"/measurements/pdf", reception, nil)
+	assert.Equal(t, 403, denied.status)
+	assert.Equal(t, "BRANCH_NOT_ACCESSIBLE", denied.errorCode())
+	assert.Empty(t, h.auditRows(t, far))
+	h.setBodyTracking(t, tn.GymTwo, true)
+	foreign := h.call(t, http.MethodGet, path, adminTwo, nil)
+	assert.Equal(t, 404, foreign.status)
+	assert.Equal(t, "MEMBER_NOT_FOUND", foreign.errorCode())
+	assert.Equal(t, 403, h.call(t, http.MethodGet, path, h.superToken(t), nil).status)
+	assert.Equal(t, 401, h.call(t, http.MethodGet, path, "", nil).status)
+	assert.Equal(t, 404, h.call(t, http.MethodGet, "/members/not-an-id/measurements/pdf", admin, nil).status)
+	assert.Len(t, h.auditRows(t, member), before+2)
+}
