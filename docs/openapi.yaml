@@ -721,6 +721,27 @@ paths:
         "403": { $ref: "#/components/responses/ApiError" }
         "404": { $ref: "#/components/responses/ApiError" }
         "409": { $ref: "#/components/responses/ApiError" }
+  /members/export:
+    get:
+      tags: [members]
+      summary: Download the member directory as CSV, Excel or PDF.
+      description: |
+        Same rules and filters as `GET /members` (every role of the gym may list the directory, so both may download it), no pagination.
+        Columns (the same in CSV and Excel): Tipo de documento, Documento, Nombre, Teléfono, Sede, Estado, Plan, Inicio, Fin, Días restantes,
+        Última boleta. The PDF adds the counts per status. More than 10,000 members is 413 EXPORT_TOO_LARGE; a `home_branch_id` that is not
+        a branch of the gym is 400 `BRANCH_INVALID`. File name `miembros-YYYY-MM-DD.<ext>`.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: format, in: query, schema: { type: string, enum: [csv, xlsx, pdf], default: csv }, description: "File format; anything else is 400 `FORMAT_INVALID`." }
+        - { name: q, in: query, schema: { type: string }, description: Name or document (contains). }
+        - { name: status, in: query, schema: { type: string, enum: [active, expiring, expired, scheduled] } }
+        - { name: home_branch_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200": { $ref: "#/components/responses/Download" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "413": { $ref: "#/components/responses/ApiError" }
   /members:
     get:
       tags: [members]
@@ -1029,6 +1050,27 @@ paths:
         "403": { $ref: "#/components/responses/ApiError" }
         "404": { $ref: "#/components/responses/ApiError" }
         "409": { $ref: "#/components/responses/ApiError" }
+  /sales/export:
+    get:
+      tags: [sales]
+      summary: Download the product sales of a period as CSV, Excel or PDF (admin).
+      description: |
+        Needs the `sales` module (403 `FEATURE_DISABLED`). Admin only, like `/sales/report`, with its filters (period and branch, same defaults
+        and limits). One row per sale, newest first; columns (the same in CSV and Excel): Fecha, Hora, Sede, Miembro, Documento, Productos,
+        Unidades, Total, Estado, Medio de pago, Vendido por. The PDF adds the report's totals (sales, units, sold, collected, pending).
+        More than 10,000 sales is 413 EXPORT_TOO_LARGE. File name `ventas-YYYY-MM-DD.<ext>`.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: format, in: query, schema: { type: string, enum: [csv, xlsx, pdf], default: csv }, description: "File format; anything else is 400 `FORMAT_INVALID`." }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: branch_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200": { $ref: "#/components/responses/Download" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "413": { $ref: "#/components/responses/ApiError" }
   /sales/report:
     get:
       tags: [sales]
@@ -1381,13 +1423,19 @@ paths:
   /payments/export:
     get:
       tags: [reports]
-      summary: Download the filtered payments as CSV.
+      summary: Download the filtered payments as CSV, Excel or PDF.
       description: |
-        Admin only (reception gets 403). Same filters as `/payments`, no pagination. UTF-8 with BOM, comma separated; columns
-        Boleta, Miembro, Documento, Plan, Importe, Medio de pago, Fecha. More than 10,000 rows is 413 EXPORT_TOO_LARGE. Cells that start with `= + - @` are prefixed with `'`.
+        Admin only (reception gets 403, whatever the format). Same filters as `/payments`, no pagination; the URL without `format` is
+        still the CSV. CSV and Excel have the same columns in the same order: Boleta, Miembro, Documento, Plan, Importe, Medio de pago, Fecha.
+        CSV: UTF-8 with BOM, comma separated, amounts and dates as the API's text; cells that start with `= + - @` are prefixed with `'`.
+        Excel: one sheet with a frozen, filterable header in the gym's colour, amounts as numbers (S/ with 2 decimals), dates as real dates
+        (dd/mm/yyyy) and a total row. PDF: A4 landscape report with the gym's letterhead (logo or monogram, name, colour), the applied
+        filters, the totals (count, sum, average, day passes), a table with a total row and "Página X de Y".
+        More than 10,000 rows is 413 EXPORT_TOO_LARGE. The file name is `pagos-YYYY-MM-DD.<ext>` (Lima date).
         Fetch it with the Bearer header and save the blob; never put the token in a URL.
       security: [{ bearer: [] }]
       parameters:
+        - { name: format, in: query, schema: { type: string, enum: [csv, xlsx, pdf], default: csv }, description: "File format; anything else is 400 `FORMAT_INVALID`." }
         - { name: from, in: query, schema: { type: string, format: date } }
         - { name: to, in: query, schema: { type: string, format: date } }
         - { name: branch_id, in: query, schema: { type: string, format: uuid } }
@@ -1396,11 +1444,7 @@ paths:
         - { name: kind, in: query, schema: { type: string, enum: [membership, day_pass] } }
         - { name: q, in: query, schema: { type: string } }
       responses:
-        "200":
-          description: The CSV file.
-          content:
-            text/csv:
-              schema: { type: string }
+        "200": { $ref: "#/components/responses/Download" }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ApiError" }
@@ -2535,6 +2579,15 @@ components:
         resource_id: { type: string, format: uuid, nullable: true, description: Null for a read of the whole list. }
         occurred_at: { type: string, format: date-time }
   responses:
+    Download:
+      description: The file, as an attachment (`Content-Disposition`) with `Cache-Control: no-store`.
+      content:
+        text/csv:
+          schema: { type: string }
+        application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+          schema: { type: string, format: binary }
+        application/pdf:
+          schema: { type: string, format: binary }
     ApiError:
       description: Error. The code says what happened (see the endpoint description).
       content:

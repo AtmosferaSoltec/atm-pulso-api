@@ -21,6 +21,7 @@ sales money is **separate** from membership income. Migration 00020 renamed the 
 | `GET /sales/pending` (members with a balance), `GET /members/{id}/pending-sales`, `GET /members/{id}/sales` (history) | admin, reception |
 | `POST /sales/collections` (collect pending sales) | admin, reception (branch reachable) |
 | `GET /sales/report` | admin |
+| `GET /sales/export?format=csv\|xlsx\|pdf` (the report's period and branch, one row per sale, up to 10,000: `413 EXPORT_TOO_LARGE`) | admin |
 
 ## Errors (stable codes)
 `FEATURE_DISABLED` 403, `PRODUCT_NOT_FOUND` 404, `PRODUCT_NAME_TAKEN` 409, `SALE_NOT_FOUND` 404, `SALE_NOT_PENDING` 409, `NOTHING_TO_COLLECT` 409, `MEMBER_NOT_FOUND` 404,

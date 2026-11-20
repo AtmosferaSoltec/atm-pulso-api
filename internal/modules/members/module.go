@@ -11,6 +11,7 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/members/app"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/branchdir"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/export"
 )
 
 // Deps are what the module needs.
@@ -19,18 +20,28 @@ type Deps struct {
 	Clock clock.Clock
 	// Logos resolves gym logos; nil when storage is not configured.
 	Logos app.LogoResolver
+	// Brands gives the letterhead of the PDF downloads; nil draws Pulso's.
+	Brands export.BrandSource
 }
 
 // Module is the assembled members module.
-type Module struct{ handler *membershttp.Handler }
+type Module struct {
+	handler *membershttp.Handler
+	exports *membershttp.ExportHandler
+}
 
 // New wires repository, directory, use cases and HTTP by hand.
 func New(deps Deps) *Module {
 	service := &app.Service{Repo: postgres.NewRepository(deps.Pool), Directory: branchdir.New(deps.Pool), Logos: deps.Logos, Clock: deps.Clock}
-	return &Module{handler: membershttp.NewHandler(service)}
+	return &Module{handler: membershttp.NewHandler(service), exports: membershttp.NewExportHandler(service, deps.Brands)}
 }
 
 // Routes mounts the module's endpoints behind authentication.
 func (m *Module) Routes(protected gin.IRoutes) {
 	m.handler.Routes(protected)
+}
+
+// ExportRoutes mounts the downloads; limit is the stricter per-IP limiter of heavy requests.
+func (m *Module) ExportRoutes(protected gin.IRoutes, limit gin.HandlerFunc) {
+	m.exports.Routes(protected, limit)
 }

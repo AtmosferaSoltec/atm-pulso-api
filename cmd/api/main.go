@@ -39,6 +39,7 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/config"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/database"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/gymbrand"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/health"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/httpserver"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/logger"
@@ -154,14 +155,20 @@ func run() int {
 	// the console out after a few screens.
 	accountsModule.AdminRoutes(api.Group("/admin", guard.Superadmin()))
 	heavy := middleware.NewRateLimiter(cfg.LoginRateLimitPerMinute).Middleware()
-	members.New(members.Deps{Pool: pool, Clock: clock.System{}, Logos: logos}).Routes(protected)
+	// Letterhead of the PDF downloads: gym name and colour, and the logo bytes when they can be fetched.
+	brands := gymbrand.New(pool, logos, log)
+	membersModule := members.New(members.Deps{Pool: pool, Clock: clock.System{}, Logos: logos, Brands: brands})
+	membersModule.Routes(protected)
+	membersModule.ExportRoutes(protected, heavy)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
 	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected)
 	kiosk.New(kiosk.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
-	sales.New(sales.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	salesModule := sales.New(sales.Deps{Pool: pool, Clock: clock.System{}, Brands: brands})
+	salesModule.Routes(protected)
+	salesModule.ExportRoutes(protected, heavy)
 	bodytracking.New(bodytracking.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
-	// The CSV download is heavy: it shares the tighter per-IP limit.
-	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, heavy)
+	// The downloads (CSV, Excel, PDF) are heavy: they share the tighter per-IP limit.
+	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}, Brands: brands}).Routes(protected, heavy)
 
 	if err := httpserver.Serve(ctx, router, cfg.Port, log); err != nil {
 		log.Error("server", "error", err)

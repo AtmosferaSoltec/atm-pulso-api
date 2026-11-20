@@ -1,4 +1,4 @@
-// Package reports serves the read-only payments report, its CSV download and the
+// Package reports serves the read-only payments report, its downloads (CSV, Excel, PDF) and the
 // dashboard. It owns no tables. See README.md.
 package reports
 
@@ -11,12 +11,15 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports/app"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/branchdir"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/clock"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/export"
 )
 
 // Deps are what the module needs.
 type Deps struct {
 	Pool  *pgxpool.Pool
 	Clock clock.Clock
+	// Brands gives the letterhead of the PDF downloads; nil draws Pulso's.
+	Brands export.BrandSource
 }
 
 // Module is the assembled reports module.
@@ -25,7 +28,7 @@ type Module struct{ handler *reportshttp.Handler }
 // New wires repository, directory, use cases and HTTP by hand.
 func New(deps Deps) *Module {
 	service := &app.Service{Repo: postgres.NewRepository(deps.Pool), Directory: branchdir.New(deps.Pool), Clock: deps.Clock}
-	return &Module{handler: reportshttp.NewHandler(service)}
+	return &Module{handler: reportshttp.NewHandler(service, deps.Brands)}
 }
 
 // Routes mounts the endpoints; exportLimit is the stricter per-IP limiter of the heavy download.

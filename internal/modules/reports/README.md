@@ -5,5 +5,7 @@ Read-only, no tables. Reads `payments`, `receipts`, `members`, `memberships`, `d
 tables; the rule is "no Go imports", and this adapter imports none).
 
 - **Rules**: `docs/domain/business-rules.md` sections 10 and 13. Money is summed in the database (`numeric`), dates are Lima dates.
-- **Reception** gets the list without `meta.totals`, no CSV and no dashboard (403).
-- **CSV**: UTF-8 with BOM, comma, up to 10,000 rows (`413 EXPORT_TOO_LARGE`), formula-looking cells prefixed with `'`.
+- **Reception** gets the list without `meta.totals`, no download and no dashboard (403).
+- **Download** (`GET /payments/export?format=csv|xlsx|pdf`, CSV by default): up to 10,000 rows (`413 EXPORT_TOO_LARGE`). The
+  file is rendered by `platform/export` (same columns in CSV and Excel; formula-looking CSV cells prefixed with `'`); the PDF letterhead
+  comes from `platform/gymbrand` (never fails because of the logo).
