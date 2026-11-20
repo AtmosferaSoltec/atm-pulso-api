@@ -728,7 +728,7 @@ paths:
       description: Every role of the gym sees every member of the gym (all its branches). Counts ignore the status filter but respect q and home_branch_id. Newest first; with `status=expiring` the soonest end comes first (fewest `days_remaining`), then by name. `q` ignores case and accents ("ramirez" finds "Ramírez").
       security: [{ bearer: [] }]
       parameters:
-        - { name: q, in: query, schema: { type: string }, description: Name or document (contains). }
+        - { name: q, in: query, schema: { type: string }, description: Name or document (contains; the name ignores case and accents). }
         - { name: status, in: query, schema: { type: string, enum: [active, expiring, expired, scheduled] } }
         - { name: home_branch_id, in: query, schema: { type: string, format: uuid } }
         - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
@@ -1231,7 +1231,7 @@ paths:
         - { name: result, in: query, schema: { type: string, enum: [allowed, denied] } }
         - { name: from, in: query, schema: { type: string, format: date }, description: Lima date, inclusive. }
         - { name: to, in: query, schema: { type: string, format: date }, description: Lima date, inclusive. }
-        - { name: q, in: query, schema: { type: string }, description: Name or document (contains). }
+        - { name: q, in: query, schema: { type: string }, description: Name or document (contains; the name ignores case and accents). }
         - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
         - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
       responses:
@@ -1356,7 +1356,7 @@ paths:
         - { name: gym_id, in: query, schema: { type: string, format: uuid } }
         - { name: method, in: query, schema: { type: string, enum: [yape_plin, cash, card, transfer] } }
         - { name: kind, in: query, schema: { type: string, enum: [membership, day_pass] } }
-        - { name: q, in: query, schema: { type: string }, description: Member name or document, or visitor name (contains). }
+        - { name: q, in: query, schema: { type: string }, description: Member name or document, or visitor name (contains; names ignore case and accents). }
         - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
         - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
       responses:

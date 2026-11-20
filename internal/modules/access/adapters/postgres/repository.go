@@ -123,7 +123,7 @@ func (r *Repository) Events(ctx context.Context, gymID uuid.UUID, f app.EventFil
 		WHERE e.gym_id = $1 AND e.branch_id = ANY($2)
 		AND ($3::text = '' OR e.allowed = ($3 = 'allowed'))
 		AND ($4::timestamptz IS NULL OR e.checked_at >= $4) AND ($5::timestamptz IS NULL OR e.checked_at < $5)
-		AND ($6::text = '' OR e.display_name ILIKE '%' || $6 || '%' OR e.document_number LIKE '%' || $6 || '%')`
+		AND ($6::text = '' OR fold_text(e.display_name) LIKE '%' || fold_text($6) || '%' OR e.document_number LIKE '%' || $6 || '%')`
 	args := []any{gymID, f.BranchIDs, f.Result, start, end, like(f.Query)}
 	var total int
 	if err := r.pool.QueryRow(ctx, `SELECT count(*) `+where, args...).Scan(&total); err != nil {

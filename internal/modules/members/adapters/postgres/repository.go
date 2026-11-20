@@ -45,7 +45,7 @@ var statusBase = memberstatus.Prefix("$1", "$2::date") + `, base AS (
     SELECT max(ends_on) AS latest_end, bool_or(starts_on > $2::date) AS scheduled
     FROM memberships WHERE member_id = m.id) s ON true
   WHERE m.gym_id = $1
-    AND ($3::text = '' OR m.full_name ILIKE '%' || $3 || '%' OR m.document_number LIKE '%' || $3 || '%')
+    AND ($3::text = '' OR fold_text(m.full_name) LIKE '%' || fold_text($3) || '%' OR m.document_number LIKE '%' || $3 || '%')
     AND ($4::uuid IS NULL OR m.home_branch_id = $4)
     AND ($5::uuid IS NULL OR m.id = $5)
 )`

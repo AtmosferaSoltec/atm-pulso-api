@@ -30,7 +30,7 @@ const paymentFrom = `FROM payments p
 	LEFT JOIN day_passes d ON d.id = p.day_pass_id AND d.gym_id = p.gym_id
 	WHERE p.gym_id = $1 AND p.branch_id = ANY($2) AND p.paid_on BETWEEN $3 AND $4
 	AND ($5::text = '' OR p.method = $5) AND ($6::text = '' OR p.kind = $6)
-	AND ($7::text = '' OR m.full_name ILIKE '%' || $7 || '%' OR m.document_number LIKE '%' || $7 || '%' OR d.customer_name ILIKE '%' || $7 || '%')`
+	AND ($7::text = '' OR fold_text(m.full_name) LIKE '%' || fold_text($7) || '%' OR m.document_number LIKE '%' || $7 || '%' OR fold_text(d.customer_name) LIKE '%' || fold_text($7) || '%')`
 
 func args(gymID uuid.UUID, f app.PaymentFilter) []any {
 	query := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(strings.TrimSpace(f.Query))
