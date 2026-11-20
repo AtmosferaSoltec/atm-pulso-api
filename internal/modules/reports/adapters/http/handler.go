@@ -2,12 +2,9 @@
 package http
 
 import (
-	"bytes"
-	"encoding/csv"
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -16,15 +13,22 @@ import (
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/modules/reports/app"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/apierror"
 	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/auth"
+	"github.com/AtmosferaSoltec/atm-pulso-api/internal/platform/export"
 )
 
 // Handler serves /payments and /dashboard.
-type Handler struct{ service *app.Service }
+type Handler struct {
+	service *app.Service
+	// brands gives the letterhead of the PDF; nil draws Pulso's.
+	brands export.BrandSource
+}
 
 // NewHandler builds the handler.
-func NewHandler(service *app.Service) *Handler { return &Handler{service: service} }
+func NewHandler(service *app.Service, brands export.BrandSource) *Handler {
+	return &Handler{service: service, brands: brands}
+}
 
-// Routes mounts the endpoints. exportLimit throttles the heavy CSV like the login.
+// Routes mounts the endpoints. exportLimit throttles the heavy download like the login.
 func (h *Handler) Routes(protected gin.IRoutes, exportLimit gin.HandlerFunc) {
 	protected.GET("/payments", h.payments)
 	protected.GET("/payments/export", exportLimit, h.export)
@@ -110,49 +114,6 @@ func (h *Handler) payments(c *gin.Context) {
 		meta.Totals = totals
 	}
 	apierror.Page(c, rows, meta)
-}
-
-var methodLabels = map[string]string{"yape_plin": "Yape/Plin", "cash": "Efectivo", "card": "Tarjeta", "transfer": "Transferencia"}
-
-// safeCell stops spreadsheet formulas: a cell starting with = + - or @ is prefixed with a quote.
-func safeCell(s string) string {
-	if s != "" && strings.ContainsRune("=+-@\t\r", rune(s[0])) {
-		return "'" + s
-	}
-	return s
-}
-
-func (h *Handler) export(c *gin.Context) {
-	q, ok := parseQuery(c)
-	if !ok {
-		return
-	}
-	p, _ := auth.FromContext(c.Request.Context())
-	rows, err := h.service.Export(c.Request.Context(), p, q)
-	if err != nil {
-		respond(c, err)
-		return
-	}
-	var buf bytes.Buffer
-	buf.WriteString("\xEF\xBB\xBF")
-	w := csv.NewWriter(&buf)
-	_ = w.Write([]string{"Boleta", "Miembro", "Documento", "Plan", "Importe", "Medio de pago", "Fecha"})
-	for _, row := range rows {
-		name, document := "", ""
-		if row.Member != nil {
-			name = row.Member.FullName
-		} else if row.VisitorName != nil {
-			name = *row.VisitorName
-		}
-		if row.Document != nil {
-			document = *row.Document
-		}
-		_ = w.Write([]string{row.Receipt.Number, safeCell(name), safeCell(document), row.PlanLabel, row.Amount, methodLabels[row.Method], row.PaidOn})
-	}
-	w.Flush()
-	c.Header("Content-Disposition", `attachment; filename="pagos.csv"`)
-	c.Header("Cache-Control", "no-store")
-	c.Data(http.StatusOK, "text/csv; charset=utf-8", buf.Bytes())
 }
 
 func (h *Handler) dashboard(c *gin.Context) {
