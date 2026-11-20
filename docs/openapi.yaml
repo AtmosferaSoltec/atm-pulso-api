@@ -1182,6 +1182,36 @@ paths:
         "200": { description: The balances., content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/PendingBalance" } } } } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ApiError" }
+  /sales/debtors:
+    get:
+      tags: [sales]
+      summary: Quick list of the members who owe pending sales, the oldest debt first.
+      description: |
+        One row per member with at least one open pending sale (collected sales and paid sales never count). Ordered by `oldest_sold_at`
+        ascending, then by name, then by member id. Reach: like `/members/{id}/pending-sales` and `/sales/pending`, balances are the gym's
+        (the member directory is shared between branches), so admin and reception see the same gym-wide list, pending sales of any branch included.
+        `q` keeps the members whose name (ignoring case and accents) or document contains it; `meta.total` counts the matching debtors.
+        No grand total of money on purpose: totals live in `/sales/report`.
+        Errors: FEATURE_DISABLED (403, the gym has not switched `sales` on), VALIDATION_FAILED (400, `PAGINATION_INVALID` on `page`/`page_size`).
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        "200":
+          description: A page of debtors.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/SalesDebtor" } }
+                  meta: { $ref: "#/components/schemas/Pagination" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
   /sales/collections:
     post:
       tags: [sales]
@@ -2462,6 +2492,23 @@ components:
         balance: { type: string, example: "21.00" }
         pending_count: { type: integer }
         oldest_sold_on: { type: string, format: date }
+    SalesDebtor:
+      type: object
+      required: [member, balance, pending_count, oldest_sold_at, oldest_sold_on]
+      properties:
+        member:
+          type: object
+          required: [id, full_name, document_type, document_number, phone]
+          properties:
+            id: { type: string, format: uuid }
+            full_name: { type: string }
+            document_type: { type: string, enum: [dni, ce] }
+            document_number: { type: string }
+            phone: { type: string }
+        balance: { type: string, example: "36.00", description: Sum of the member's open pending sales. }
+        pending_count: { type: integer, example: 2 }
+        oldest_sold_at: { type: string, format: date-time, description: When the oldest open pending sale was made. }
+        oldest_sold_on: { type: string, format: date, description: Its Lima date. }
     MemberPending:
       type: object
       required: [member_id, balance, pending_count, sales]

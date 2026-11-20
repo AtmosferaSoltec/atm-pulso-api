@@ -339,6 +339,26 @@ func (r *Repository) PendingBalances(ctx context.Context, gymID uuid.UUID) ([]ap
 	return out, rows.Err()
 }
 
+// Debtors aggregates the open pending sales per member, the oldest pending sale first. Only the sales table is read
+// (the partial index sales_pending_idx serves it); the member data is attached by the use case through peopledir.
+func (r *Repository) Debtors(ctx context.Context, gymID uuid.UUID) ([]app.DebtorRecord, error) {
+	rows, err := r.pool.Query(ctx, `SELECT member_id, sum(total)::numeric(14,2)::text, count(*), min(sold_at), min(sold_on) FROM sales
+		WHERE gym_id = $1 AND status = 'pending' AND member_id IS NOT NULL GROUP BY member_id ORDER BY min(sold_at), member_id`, gymID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []app.DebtorRecord{}
+	for rows.Next() {
+		var rec app.DebtorRecord
+		if err := rows.Scan(&rec.MemberID, &rec.Balance, &rec.PendingCount, &rec.OldestSoldAt, &rec.OldestSoldOn); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
 // MemberPending lists the open pending sales of a member, oldest first.
 func (r *Repository) MemberPending(ctx context.Context, gymID, memberID uuid.UUID) ([]app.SaleRecord, error) {
 	recs, err := loadSales(ctx, r.pool, `AND s.member_id = $2 AND s.status = 'pending'`, `s.sold_at, s.id`, ``, gymID, memberID)

@@ -29,6 +29,8 @@ type People interface {
 	Member(ctx context.Context, gymID, memberID uuid.UUID) (peopledir.Person, error)
 	Members(ctx context.Context, gymID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]peopledir.Person, error)
 	Users(ctx context.Context, gymID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]peopledir.Person, error)
+	// MemberCards reads the listed members with their contact data; a non-empty search keeps only the matching ones.
+	MemberCards(ctx context.Context, gymID uuid.UUID, ids []uuid.UUID, search string) (map[uuid.UUID]peopledir.MemberCard, error)
 }
 
 // Vouchers counts the proofs of payment (vouchers) of sales and collections. They belong to the vouchers
@@ -223,6 +225,31 @@ type PendingBalance struct {
 	OldestSoldOn string    `json:"oldest_sold_on"`
 }
 
+// DebtorMember is the member of a debtors row, with what staff need to reach them.
+type DebtorMember struct {
+	ID             uuid.UUID `json:"id"`
+	FullName       string    `json:"full_name"`
+	DocumentType   string    `json:"document_type"`
+	DocumentNumber string    `json:"document_number"`
+	Phone          string    `json:"phone"`
+}
+
+// Debtor is a row of GET /sales/debtors: a member with open pending sales, what they add up to and since when.
+type Debtor struct {
+	Member       DebtorMember `json:"member"`
+	Balance      string       `json:"balance"`
+	PendingCount int          `json:"pending_count"`
+	OldestSoldAt string       `json:"oldest_sold_at"`
+	OldestSoldOn string       `json:"oldest_sold_on"`
+}
+
+// DebtorFilter narrows GET /sales/debtors. Search matches the member's name (ignoring case and accents) or document.
+type DebtorFilter struct {
+	Search   string
+	Page     int
+	PageSize int
+}
+
 // MemberPending is the balance of one member with the sales that make it.
 type MemberPending struct {
 	MemberID     uuid.UUID  `json:"member_id"`
@@ -404,6 +431,8 @@ type Repository interface {
 	CreateSale(ctx context.Context, s NewSale) (rec SaleRecord, existed bool, err error)
 	Sales(ctx context.Context, gymID uuid.UUID, f SaleFilter) ([]SaleRecord, int, error)
 	PendingBalances(ctx context.Context, gymID uuid.UUID) ([]PendingBalanceRecord, error)
+	// Debtors aggregates the open pending sales of the gym per member, the oldest pending sale first.
+	Debtors(ctx context.Context, gymID uuid.UUID) ([]DebtorRecord, error)
 	// MemberPending lists the open pending sales of a member, oldest first.
 	MemberPending(ctx context.Context, gymID, memberID uuid.UUID) ([]SaleRecord, error)
 	// Collect marks whole pending sales as paid in one transaction, locking them. existed is true for a repeated id.
@@ -417,5 +446,14 @@ type PendingBalanceRecord struct {
 	MemberID     uuid.UUID
 	Balance      string
 	PendingCount int
+	OldestSoldOn time.Time
+}
+
+// DebtorRecord is a debtors row before the member data is attached.
+type DebtorRecord struct {
+	MemberID     uuid.UUID
+	Balance      string
+	PendingCount int
+	OldestSoldAt time.Time
 	OldestSoldOn time.Time
 }

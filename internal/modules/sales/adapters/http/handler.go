@@ -37,6 +37,7 @@ func (h *Handler) Routes(protected gin.IRoutes) {
 	protected.GET("/sales", on, h.sales)
 	protected.POST("/sales", on, h.sell)
 	protected.GET("/sales/pending", on, h.pendingBalances)
+	protected.GET("/sales/debtors", on, h.debtors)
 	protected.GET("/sales/report", on, h.report)
 	protected.POST("/sales/collections", on, h.collect)
 	protected.GET("/members/:id/pending-sales", on, h.memberPending)
@@ -159,6 +160,20 @@ func (h *Handler) pendingBalances(c *gin.Context) {
 		return
 	}
 	apierror.OK(c, list)
+}
+
+// debtors pages the members who owe pending sales; its page_size defaults to 50 (max 100).
+func (h *Handler) debtors(c *gin.Context) {
+	page, size, ok := paginate(c, 50)
+	if !ok {
+		return
+	}
+	list, total, err := h.service.Debtors(c.Request.Context(), principal(c), app.DebtorFilter{Search: c.Query("q"), Page: page, PageSize: size})
+	if err != nil {
+		respond(c, err)
+		return
+	}
+	apierror.Page(c, list, apierror.Meta{Page: page, PageSize: size, Total: int64(total)})
 }
 
 func (h *Handler) memberSales(c *gin.Context) {
@@ -286,8 +301,11 @@ func optionalID(c *gin.Context, field string) (*uuid.UUID, bool) {
 	return &id, false
 }
 
-func pagination(c *gin.Context) (int, int, bool) {
-	page, size := 1, 25
+func pagination(c *gin.Context) (int, int, bool) { return paginate(c, 25) }
+
+// paginate reads page and page_size (1..100, defaulting to defaultSize); false once it has answered 400.
+func paginate(c *gin.Context, defaultSize int) (int, int, bool) {
+	page, size := 1, defaultSize
 	for _, field := range []string{"page", "page_size"} {
 		raw := c.Query(field)
 		if raw == "" {

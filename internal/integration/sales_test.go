@@ -52,7 +52,7 @@ func TestProductsModuleOffAnswersFeatureDisabledEverywhere(t *testing.T) {
 	id := uuid.NewString()
 	calls := []struct{ method, path string }{
 		{"GET", "/products"}, {"POST", "/products"}, {"PATCH", "/products/" + id}, {"DELETE", "/products/" + id}, {"GET", "/sales"}, {"POST", "/sales"},
-		{"GET", "/sales/pending"}, {"GET", "/sales/report"}, {"POST", "/sales/collections"}, {"GET", "/members/" + id + "/pending-sales"}, {"GET", "/members/" + id + "/sales"},
+		{"GET", "/sales/pending"}, {"GET", "/sales/debtors"}, {"GET", "/sales/report"}, {"POST", "/sales/collections"}, {"GET", "/members/" + id + "/pending-sales"}, {"GET", "/members/" + id + "/sales"},
 	}
 	for _, token := range []string{admin, reception} {
 		for _, call := range calls {

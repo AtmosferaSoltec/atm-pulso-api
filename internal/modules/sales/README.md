@@ -11,7 +11,7 @@ sales money is **separate** from membership income. Migration 00020 renamed the 
 ## Ports
 - `Repository` (postgres adapter): all SQL, one transaction per sale and per collection.
 - `Vouchers` (optional): counts of the proofs of payment of sales and collections, from the vouchers module (wired in `main.go`), for `voucher_count`.
-- `Directory` = `platform/branchdir` (branches, and whether a gym exists for the admin routes) and `People` = `platform/peopledir` (member existence and names, staff names): read-only SELECTs, no imports of other modules.
+- `Directory` = `platform/branchdir` (branches, and whether a gym exists for the admin routes) and `People` = `platform/peopledir` (member existence and names, staff names, and `MemberCards`: contact data of a batch of members, optionally filtered by a `fold_text` search): read-only SELECTs, no imports of other modules.
 
 ## Endpoints (all behind `RequireFeature(sales)` -> `403 FEATURE_DISABLED`)
 | | Who |
@@ -23,6 +23,7 @@ sales money is **separate** from membership income. Migration 00020 renamed the 
 | `GET`/`POST /admin/gyms/{gym_id}/product-categories` (bulk `names`), `PATCH`/`DELETE /admin/gyms/{gym_id}/product-categories/{id}` (no module guard) | platform superadmin (console-web) |
 | `POST /sales` (status `paid` or `pending`), `GET /sales` | admin, reception (reception lists its branches) |
 | `GET /sales/pending` (members with a balance), `GET /members/{id}/pending-sales`, `GET /members/{id}/sales` (history) | admin, reception |
+| `GET /sales/debtors?page=&page_size=&q=` (debtors list, see below) | admin, reception |
 | `POST /sales/collections` (collect pending sales) | admin, reception (branch reachable) |
 | `GET /sales/report` | admin |
 | `GET`/`POST /sales/{id}/vouchers`, `GET`/`POST /sales/collections/{id}/vouchers` (served by the **vouchers** module, same guard) | admin, reception (branch reachable) |
@@ -30,6 +31,14 @@ sales money is **separate** from membership income. Migration 00020 renamed the 
 
 Sale rows (`GET /sales`, `/members/{id}/sales`, `/members/{id}/pending-sales`, `POST /sales`) carry `voucher_count`: the proofs of the sale paid on the spot,
 or of its collection when it was collected later; 0 while pending.
+
+## Debtors list (`GET /sales/debtors`)
+One row per member with at least one open pending sale: `member {id, full_name, document_type, document_number, phone}`, `balance` (money string),
+`pending_count`, `oldest_sold_at` (RFC3339) and `oldest_sold_on` (Lima date). Order: oldest pending sale first, then name, then member id.
+Paginated (`meta {page, page_size, total}`, `page_size` default 50, max 100). `q` matches the name ignoring case and accents (`fold_text`) or part of the
+document. **Reach: gym-wide for both roles**, the same as `/members/{id}/pending-sales` and `/sales/pending` (a member's balance is the gym's, whatever
+branch sold it). No money grand total on purpose (totals live in the report). The aggregate reads only `sales`; member data and the search come from
+`peopledir.MemberCards` in one batch (no JOIN to `members`, no N+1); ordering by name and paging happen in the use case (debtors of a gym are few).
 
 ## Errors (stable codes)
 `FEATURE_DISABLED` 403, `PRODUCT_NOT_FOUND` 404, `PRODUCT_NAME_TAKEN` 409, `PRODUCT_HAS_SALES` 409, `CATEGORY_NOT_FOUND` 404, `CATEGORY_NAME_TAKEN` 409, `SALE_NOT_FOUND` 404, `SALE_NOT_PENDING` 409, `NOTHING_TO_COLLECT` 409, `MEMBER_NOT_FOUND` 404,

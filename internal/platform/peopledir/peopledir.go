@@ -45,6 +45,39 @@ func (r *Reader) Members(ctx context.Context, gymID uuid.UUID, ids []uuid.UUID) 
 	return r.many(ctx, `SELECT id, full_name, document_number FROM members WHERE gym_id=$1 AND id = ANY($2)`, gymID, ids)
 }
 
+// MemberCard is a member with the contact data a list needs (a debtors list, for instance).
+type MemberCard struct {
+	ID             uuid.UUID
+	FullName       string
+	DocumentType   string
+	DocumentNumber string
+	Phone          string
+}
+
+// MemberCards returns the listed members of the gym by id, in one query. A non-empty search keeps only the ones whose
+// name (ignoring case and accents, fold_text) or document contains it, the same match as the members list.
+func (r *Reader) MemberCards(ctx context.Context, gymID uuid.UUID, ids []uuid.UUID, search string) (map[uuid.UUID]MemberCard, error) {
+	out := make(map[uuid.UUID]MemberCard, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx, `SELECT id, full_name, document_type, document_number, phone FROM members
+		WHERE gym_id = $1 AND id = ANY($2)
+		  AND ($3::text = '' OR fold_text(full_name) LIKE '%' || fold_text($3) || '%' OR document_number LIKE '%' || $3 || '%')`, gymID, ids, search)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c MemberCard
+		if err := rows.Scan(&c.ID, &c.FullName, &c.DocumentType, &c.DocumentNumber, &c.Phone); err != nil {
+			return nil, err
+		}
+		out[c.ID] = c
+	}
+	return out, rows.Err()
+}
+
 // Users returns the listed staff users of the gym by id.
 func (r *Reader) Users(ctx context.Context, gymID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]Person, error) {
 	return r.many(ctx, `SELECT id, full_name, '' FROM users WHERE gym_id=$1 AND id = ANY($2)`, gymID, ids)

@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -236,6 +238,65 @@ func (s *Service) PendingBalances(ctx context.Context, p auth.Principal) ([]Pend
 			PendingCount: r.PendingCount, OldestSoldOn: r.OldestSoldOn.Format("2006-01-02")})
 	}
 	return out, nil
+}
+
+// Debtors is the quick list of the members who owe pending sales, the oldest debt first (then by name), one page at a time.
+// Reach: like GET /members/{id}/pending-sales and GET /sales/pending, balances are the gym's (the member directory is
+// shared between branches and a member pays at any of them), so admin and reception see the same gym-wide list.
+// The member data (and the search, accent-insensitive with fold_text) comes from peopledir in one batch: no JOIN with
+// the members table and no N+1.
+func (s *Service) Debtors(ctx context.Context, p auth.Principal, f DebtorFilter) ([]Debtor, int, error) {
+	recs, err := s.Repo.Debtors(ctx, p.GymID)
+	if err != nil {
+		return nil, 0, err
+	}
+	memberIDs := make([]uuid.UUID, 0, len(recs))
+	for _, r := range recs {
+		memberIDs = append(memberIDs, r.MemberID)
+	}
+	search := strings.TrimSpace(f.Search)
+	cards, err := s.People.MemberCards(ctx, p.GymID, memberIDs, search)
+	if err != nil {
+		return nil, 0, err
+	}
+	type row struct {
+		rec  DebtorRecord
+		card peopledir.MemberCard
+	}
+	rows := make([]row, 0, len(recs))
+	for _, r := range recs {
+		card, ok := cards[r.MemberID]
+		if !ok {
+			continue // outside the search (or no longer in the directory)
+		}
+		rows = append(rows, row{rec: r, card: card})
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if !a.rec.OldestSoldAt.Equal(b.rec.OldestSoldAt) {
+			return a.rec.OldestSoldAt.Before(b.rec.OldestSoldAt)
+		}
+		if an, bn := strings.ToLower(a.card.FullName), strings.ToLower(b.card.FullName); an != bn {
+			return an < bn
+		}
+		return a.rec.MemberID.String() < b.rec.MemberID.String()
+	})
+	total := len(rows)
+	start := (f.Page - 1) * f.PageSize
+	if start > total {
+		start = total
+	}
+	end := min(start+f.PageSize, total)
+	out := make([]Debtor, 0, end-start)
+	for _, r := range rows[start:end] {
+		out = append(out, Debtor{
+			Member: DebtorMember{ID: r.card.ID, FullName: r.card.FullName, DocumentType: r.card.DocumentType,
+				DocumentNumber: r.card.DocumentNumber, Phone: r.card.Phone},
+			Balance: r.rec.Balance, PendingCount: r.rec.PendingCount,
+			OldestSoldAt: r.rec.OldestSoldAt.UTC().Format(time.RFC3339), OldestSoldOn: r.rec.OldestSoldOn.Format("2006-01-02"),
+		})
+	}
+	return out, total, nil
 }
 
 // MemberPending is what one member owes and the pending sales behind it.
