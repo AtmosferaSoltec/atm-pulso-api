@@ -52,8 +52,10 @@ var statusBase = memberstatus.Prefix("$1", "$2::date") + `, base AS (
 
 // pageQuery selects one page of base and then looks up branch, current period and last receipt
 // for those rows only. $6 status filter (” = any), $7 limit, $8 offset.
+// The list is newest first, except "expiring": soonest end first, then by name (the dashboard shows it).
 var pageQuery = statusBase + `, page AS (
-  SELECT * FROM base WHERE ($6::text = '' OR status = $6) ORDER BY created_at DESC, id DESC LIMIT $7 OFFSET $8
+  SELECT * FROM base WHERE ($6::text = '' OR status = $6)
+  ORDER BY ` + pageOrder("") + ` LIMIT $7 OFFSET $8
 )
 SELECT pg.id, pg.document_type, pg.document_number, pg.full_name, pg.phone, pg.created_at,
        b.id, b.name, COALESCE(g.display_name, g.name), pg.status, pg.days_remaining,
@@ -70,7 +72,14 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
   SELECT r.number FROM payments p JOIN receipts r ON r.id = p.receipt_id
   WHERE p.member_id = pg.id ORDER BY p.created_at DESC, r.number DESC LIMIT 1) lr ON true
-ORDER BY pg.created_at DESC, pg.id DESC`
+ORDER BY ` + pageOrder("pg.")
+
+// pageOrder is the order of the list; the CASE terms are NULL (no effect) unless $6 is "expiring".
+func pageOrder(alias string) string {
+	return `CASE WHEN $6::text = 'expiring' THEN ` + alias + `days_remaining END,
+  CASE WHEN $6::text = 'expiring' THEN lower(` + alias + `full_name) END,
+  ` + alias + `created_at DESC, ` + alias + `id DESC`
+}
 
 var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 

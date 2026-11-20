@@ -261,6 +261,41 @@ func TestMemberListStatusCountsAndFilters(t *testing.T) {
 	assert.Equal(t, 4.0, h.call(t, http.MethodGet, "/members", reception, nil).body["meta"].(map[string]any)["total"])
 }
 
+func TestExpiringMembersComeSoonestFirst(t *testing.T) {
+	h := newHarness(t)
+	tn := h.newTenant(t)
+	admin := h.token(t, tn.Admin)
+	today := limaToday()
+	add := func(name string, start time.Time, months ...int) {
+		t.Helper()
+		body := enrollBody(tn.BranchA, uniqueDocument())
+		body["full_name"], body["starts_on"], body["months"] = name, iso(start), append(months, 1)[0]
+		require.Equal(t, 201, h.enroll(t, admin, body).status)
+	}
+	// Created in an order that differs from the expected one, so created_at cannot explain it.
+	add("Beta Luego", today.AddDate(0, -1, 5))
+	add("Zeta Pronto", today.AddDate(0, -1, 2))
+	add("alfa Luego", today.AddDate(0, -1, 5))
+	add("Activa Larga", today, 3)
+
+	res := h.call(t, http.MethodGet, "/members?status=expiring", admin, nil)
+	require.Equal(t, 200, res.status, res.body)
+	var names []string
+	var days []float64
+	for _, m := range res.body["data"].([]any) {
+		names = append(names, m.(map[string]any)["full_name"].(string))
+		days = append(days, m.(map[string]any)["days_remaining"].(float64))
+	}
+	require.Len(t, names, 3)
+	assert.Equal(t, []string{"Zeta Pronto", "alfa Luego", "Beta Luego"}, names, "soonest first, then by name ignoring case")
+	assert.Less(t, days[0], days[1])
+
+	// Without the filter the list stays newest first.
+	all := h.call(t, http.MethodGet, "/members", admin, nil).body["data"].([]any)
+	assert.Equal(t, "Activa Larga", all[0].(map[string]any)["full_name"])
+	assert.Equal(t, "Beta Luego", all[3].(map[string]any)["full_name"])
+}
+
 func TestMemberEditChangesOnlyNameAndPhone(t *testing.T) {
 	h := newHarness(t)
 	tn := h.newTenant(t)

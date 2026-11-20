@@ -725,7 +725,7 @@ paths:
     get:
       tags: [members]
       summary: List the shared member directory with status counts.
-      description: Every role of the gym sees every member of the gym (all its branches). Counts ignore the status filter but respect q and home_branch_id.
+      description: Every role of the gym sees every member of the gym (all its branches). Counts ignore the status filter but respect q and home_branch_id. Newest first; with `status=expiring` the soonest end comes first (fewest `days_remaining`), then by name. `q` ignores case and accents ("ramirez" finds "Ramírez").
       security: [{ bearer: [] }]
       parameters:
         - { name: q, in: query, schema: { type: string }, description: Name or document (contains). }
