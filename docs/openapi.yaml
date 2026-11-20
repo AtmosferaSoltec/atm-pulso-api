@@ -295,6 +295,80 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/Error" }
+  /admin/gyms/{gym_id}/product-categories:
+    get:
+      tags: [admin]
+      summary: A gym's product categories, with how many products each has (superadmin).
+      description: Same order as `GET /product-categories`. `product_count` lets the console say how many products a deletion leaves without category. Unknown gym is 404 NOT_FOUND.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: The categories., content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/AdminProductCategory" } } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [admin]
+      summary: Add many product categories to a gym at once (superadmin).
+      description: |
+        Blank names are ignored; each name is trimmed, 1 to 40 characters (one too long fails the whole request with 400
+        CATEGORY_NAMES_INVALID, as does an empty list or more than 100 names). Names the gym already has, or repeated in the list,
+        are skipped ignoring case and returned in `skipped`. New ones go at the end, in the order sent. 201 when something was
+        created, 200 when everything was skipped. Works whether or not the gym has the `sales` module on.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [names]
+              properties:
+                names: { type: array, maxItems: 100, items: { type: string } }
+      responses:
+        "200": { description: Nothing new., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/ProductCategoriesBulkResult" } } } } } }
+        "201": { description: Created., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/ProductCategoriesBulkResult" } } } } } }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/Error" }
+  /admin/gyms/{gym_id}/product-categories/{id}:
+    patch:
+      tags: [admin]
+      summary: Rename or move a gym's product category (superadmin).
+      description: Same rules as `PATCH /product-categories/{id}`.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProductCategoryChanges" }
+      responses:
+        "200": { description: The category., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/ProductCategory" } } } } } }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [admin]
+      summary: Delete a gym's product category (superadmin).
+      description: Its products stay, without category.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: gym_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/Error" }
   /admin/modules:
     get:
       tags: [admin]
@@ -908,7 +982,8 @@ paths:
       summary: Add a product (admin).
       description: |
         `price` is text, 0.01 to 10000.00. Names are unique per gym ignoring case. Repeating the same `id` of the gym answers the stored product with 200.
-        Errors: PRODUCT_NAME_TAKEN (409), CONFLICT (409, the id belongs to another gym), VALIDATION_FAILED (400: PRODUCT_NAME_INVALID, PRODUCT_PRICE_INVALID, PRODUCT_POSITION_INVALID), FORBIDDEN (403, reception).
+        `category_id` is optional and must be a category of the same gym.
+        Errors: PRODUCT_NAME_TAKEN (409), CONFLICT (409, the id belongs to another gym), VALIDATION_FAILED (400: PRODUCT_NAME_INVALID, PRODUCT_PRICE_INVALID, PRODUCT_POSITION_INVALID, CATEGORY_INVALID), FORBIDDEN (403, reception).
       security: [{ bearer: [] }]
       requestBody:
         required: true
@@ -957,6 +1032,72 @@ paths:
         "403": { $ref: "#/components/responses/ApiError" }
         "404": { $ref: "#/components/responses/ApiError" }
         "409": { $ref: "#/components/responses/ApiError" }
+  /product-categories:
+    get:
+      tags: [sales]
+      summary: The product categories of the gym (module `sales`).
+      description: Any staff role. Ordered by `position`, then name.
+      security: [{ bearer: [] }]
+      responses:
+        "200": { description: The categories., content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/ProductCategory" } } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+    post:
+      tags: [sales]
+      summary: Add a product category at the end of the list (admin).
+      description: |
+        The name is trimmed (inner spaces collapsed), 1 to 40 characters, unique per gym ignoring case.
+        Errors: CATEGORY_NAME_TAKEN (409), VALIDATION_FAILED (400: CATEGORY_NAME_INVALID), FORBIDDEN (403, reception).
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 40 }
+      responses:
+        "201": { description: Created., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/ProductCategory" } } } } } }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "409": { $ref: "#/components/responses/ApiError" }
+  /product-categories/{id}:
+    patch:
+      tags: [sales]
+      summary: Rename or move a product category (admin).
+      description: |
+        Only the fields sent change. To reorder, send the new `position` of each category that moved.
+        Errors: CATEGORY_NOT_FOUND (404), CATEGORY_NAME_TAKEN (409), VALIDATION_FAILED (400: CATEGORY_NAME_INVALID, CATEGORY_POSITION_INVALID).
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProductCategoryChanges" }
+      responses:
+        "200": { description: The category., content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/ProductCategory" } } } } } }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "404": { $ref: "#/components/responses/ApiError" }
+        "409": { $ref: "#/components/responses/ApiError" }
+    delete:
+      tags: [sales]
+      summary: Delete a product category (admin).
+      description: Its products stay, without category (`category_id` null). CATEGORY_NOT_FOUND (404).
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ApiError" }
+        "404": { $ref: "#/components/responses/ApiError" }
   /sales:
     get:
       tags: [sales]
@@ -1966,13 +2107,47 @@ components:
         method: { type: string }
     Product:
       type: object
-      required: [id, name, price, is_active, position]
+      required: [id, name, price, is_active, position, category_id, category]
       properties:
         id: { type: string, format: uuid }
         name: { type: string, maxLength: 60 }
         price: { type: string, example: "8.50" }
         is_active: { type: boolean }
         position: { type: integer }
+        category_id: { type: [string, "null"], format: uuid }
+        category:
+          oneOf:
+            - type: object
+              required: [id, name]
+              properties:
+                id: { type: string, format: uuid }
+                name: { type: string }
+            - { type: "null" }
+    ProductCategory:
+      type: object
+      required: [id, name, position]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, maxLength: 40 }
+        position: { type: integer }
+    AdminProductCategory:
+      allOf:
+        - { $ref: "#/components/schemas/ProductCategory" }
+        - type: object
+          required: [product_count]
+          properties:
+            product_count: { type: integer, description: Products (active or not) in this category. }
+    ProductCategoryChanges:
+      type: object
+      properties:
+        name: { type: string, maxLength: 40 }
+        position: { type: integer, minimum: 0, maximum: 10000 }
+    ProductCategoriesBulkResult:
+      type: object
+      required: [created, skipped]
+      properties:
+        created: { type: array, items: { $ref: "#/components/schemas/ProductCategory" } }
+        skipped: { type: array, items: { type: string }, description: Names not created because the gym had them or they were repeated (ignoring case). }
     NewProduct:
       type: object
       required: [name, price]
@@ -1982,6 +2157,7 @@ components:
         price: { type: string, example: "8.50", description: 0.01 to 10000.00. }
         is_active: { type: boolean, default: true }
         position: { type: integer, minimum: 0, description: Omit to put it last. }
+        category_id: { type: [string, "null"], format: uuid, description: Optional; a category of the same gym. }
     ProductChanges:
       type: object
       properties:
@@ -1989,6 +2165,7 @@ components:
         price: { type: string }
         is_active: { type: boolean }
         position: { type: integer, minimum: 0 }
+        category_id: { type: [string, "null"], format: uuid, description: Absent keeps it; null clears it; otherwise a category of the same gym (CATEGORY_INVALID). }
     NewProductSale:
       type: object
       required: [branch_id, items]

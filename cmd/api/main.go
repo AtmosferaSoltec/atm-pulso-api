@@ -152,13 +152,16 @@ func run() int {
 	// The platform administrator (console-web) has its own surface, only for superadmins. It shares the general
 	// per-IP limit: every console user reaches pulso-api from the console's proxy, so a tight limit would lock
 	// the console out after a few screens.
-	accountsModule.AdminRoutes(api.Group("/admin", guard.Superadmin()))
+	adminRoutes := api.Group("/admin", guard.Superadmin())
+	accountsModule.AdminRoutes(adminRoutes)
 	heavy := middleware.NewRateLimiter(cfg.LoginRateLimitPerMinute).Middleware()
 	members.New(members.Deps{Pool: pool, Clock: clock.System{}, Logos: logos}).Routes(protected)
 	access.New(access.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
 	vouchers.New(vouchers.Deps{Pool: pool, Store: voucherStore}).Routes(protected)
 	kiosk.New(kiosk.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
-	sales.New(sales.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
+	salesModule := sales.New(sales.Deps{Pool: pool, Clock: clock.System{}})
+	salesModule.Routes(protected)
+	salesModule.AdminRoutes(adminRoutes)
 	bodytracking.New(bodytracking.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected)
 	// The CSV download is heavy: it shares the tighter per-IP limit.
 	reports.New(reports.Deps{Pool: pool, Clock: clock.System{}}).Routes(protected, heavy)

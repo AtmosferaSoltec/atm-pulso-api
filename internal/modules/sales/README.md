@@ -5,27 +5,30 @@ A sale may be linked to a member; a sale not collected yet is **pending** and is
 R-/D- series, no invoices, no inventory. Rules: `docs/domain/business-rules.md` section 11c.
 
 ## Tables (it owns them)
-`products`, `sales`, `sale_items`, `sale_collections` (migration 00018). Composite FKs `(x_id, gym_id)` everywhere. It never writes `payments`/`receipts`:
+`products`, `sales`, `sale_items`, `sale_collections` (migration 00018), `product_categories` (migration 00024; `products.category_id` is `ON DELETE SET NULL`). Composite FKs `(x_id, gym_id)` everywhere. It never writes `payments`/`receipts`:
 sales money is **separate** from membership income. Migration 00020 renamed the module key `products` -> `sales` in `gyms.features`.
 
 ## Ports
 - `Repository` (postgres adapter): all SQL, one transaction per sale and per collection.
-- `Directory` = `platform/branchdir` (branches) and `People` = `platform/peopledir` (member existence and names, staff names): read-only SELECTs, no imports of other modules.
+- `Directory` = `platform/branchdir` (branches, and whether a gym exists for the admin routes) and `People` = `platform/peopledir` (member existence and names, staff names): read-only SELECTs, no imports of other modules.
 
 ## Endpoints (all behind `RequireFeature(sales)` -> `403 FEATURE_DISABLED`)
 | | Who |
 |---|---|
 | `GET /products` (`?include_inactive=true` admin only) | admin, reception |
 | `POST /products`, `PATCH /products/{id}`, `DELETE /products/{id}` (only never-sold products; otherwise deactivate) | admin |
+| `GET /product-categories` | admin, reception |
+| `POST /product-categories`, `PATCH`/`DELETE /product-categories/{id}` | admin |
+| `GET`/`POST /admin/gyms/{gym_id}/product-categories` (bulk `names`), `PATCH`/`DELETE /admin/gyms/{gym_id}/product-categories/{id}` (no module guard) | platform superadmin (console-web) |
 | `POST /sales` (status `paid` or `pending`), `GET /sales` | admin, reception (reception lists its branches) |
 | `GET /sales/pending` (members with a balance), `GET /members/{id}/pending-sales`, `GET /members/{id}/sales` (history) | admin, reception |
 | `POST /sales/collections` (collect pending sales) | admin, reception (branch reachable) |
 | `GET /sales/report` | admin |
 
 ## Errors (stable codes)
-`FEATURE_DISABLED` 403, `PRODUCT_NOT_FOUND` 404, `PRODUCT_NAME_TAKEN` 409, `PRODUCT_HAS_SALES` 409, `SALE_NOT_FOUND` 404, `SALE_NOT_PENDING` 409, `NOTHING_TO_COLLECT` 409, `MEMBER_NOT_FOUND` 404,
+`FEATURE_DISABLED` 403, `PRODUCT_NOT_FOUND` 404, `PRODUCT_NAME_TAKEN` 409, `PRODUCT_HAS_SALES` 409, `CATEGORY_NOT_FOUND` 404, `CATEGORY_NAME_TAKEN` 409, `SALE_NOT_FOUND` 404, `SALE_NOT_PENDING` 409, `NOTHING_TO_COLLECT` 409, `MEMBER_NOT_FOUND` 404,
 `BRANCH_NOT_ACCESSIBLE` 403, `SCOPE_NOT_ALLOWED` 400, `CONFLICT` 409, `VALIDATION_FAILED` with field codes `PRODUCT_NAME_INVALID`, `PRODUCT_PRICE_INVALID`,
-`PRODUCT_POSITION_INVALID`, `ITEMS_INVALID`, `PRODUCT_INVALID`, `TOTAL_TOO_LARGE`, `STATUS_INVALID`, `METHOD_INVALID`, `MEMBER_REQUIRED`, `MEMBER_INVALID`, `DATE_INVALID`,
+`PRODUCT_POSITION_INVALID`, `CATEGORY_INVALID`, `CATEGORY_NAME_INVALID`, `CATEGORY_NAMES_INVALID`, `CATEGORY_POSITION_INVALID`, `ITEMS_INVALID`, `PRODUCT_INVALID`, `TOTAL_TOO_LARGE`, `STATUS_INVALID`, `METHOD_INVALID`, `MEMBER_REQUIRED`, `MEMBER_INVALID`, `DATE_INVALID`,
 `DATE_RANGE_INVALID`, `GROUP_BY_INVALID`, `SALE_IDS_INVALID`.
 
 ## Concurrency and idempotency

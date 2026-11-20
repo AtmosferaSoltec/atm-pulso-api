@@ -30,6 +30,10 @@ func (h *Handler) Routes(protected gin.IRoutes) {
 	protected.POST("/products", on, h.createProduct)
 	protected.PATCH("/products/:id", on, h.updateProduct)
 	protected.DELETE("/products/:id", on, h.deleteProduct)
+	protected.GET("/product-categories", on, h.categories)
+	protected.POST("/product-categories", on, h.createCategory)
+	protected.PATCH("/product-categories/:id", on, h.updateCategory)
+	protected.DELETE("/product-categories/:id", on, h.deleteCategory)
 	protected.GET("/sales", on, h.sales)
 	protected.POST("/sales", on, h.sell)
 	protected.GET("/sales/pending", on, h.pendingBalances)
@@ -318,6 +322,12 @@ func respond(c *gin.Context, err error) {
 		apierror.Respond(c, apierror.New(http.StatusConflict, "PRODUCT_NAME_TAKEN", "Ya tienes un producto con ese nombre."))
 	case errors.Is(err, domain.ErrProductHasSales):
 		apierror.Respond(c, apierror.New(http.StatusConflict, "PRODUCT_HAS_SALES", "Este producto ya se vendió: solo puedes darlo de baja."))
+	case errors.Is(err, domain.ErrCategoryNotFound):
+		apierror.Respond(c, apierror.New(http.StatusNotFound, "CATEGORY_NOT_FOUND", "La categoría ya no existe."))
+	case errors.Is(err, domain.ErrCategoryNameTaken):
+		apierror.Respond(c, apierror.New(http.StatusConflict, "CATEGORY_NAME_TAKEN", "Ya tienes una categoría con ese nombre."))
+	case errors.Is(err, domain.ErrGymNotFound):
+		apierror.Respond(c, apierror.ErrNotFound)
 	case errors.Is(err, domain.ErrSaleNotFound):
 		apierror.Respond(c, apierror.New(http.StatusNotFound, "SALE_NOT_FOUND", "La venta ya no existe."))
 	case errors.Is(err, domain.ErrSaleNotPending):

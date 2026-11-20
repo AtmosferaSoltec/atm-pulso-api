@@ -32,3 +32,8 @@ func New(deps Deps) *Module {
 func (m *Module) Routes(protected gin.IRoutes) {
 	m.handler.Routes(protected)
 }
+
+// AdminRoutes mounts the platform administrator's routes (behind auth.Guard.Superadmin).
+func (m *Module) AdminRoutes(admin gin.IRoutes) {
+	m.handler.AdminRoutes(admin)
+}

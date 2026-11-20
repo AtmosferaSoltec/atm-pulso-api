@@ -72,7 +72,7 @@ func (s *Service) CreateProduct(ctx context.Context, p auth.Principal, in Produc
 		id = ids.New()
 	}
 	active := in.IsActive == nil || *in.IsActive
-	return s.Repo.CreateProduct(ctx, p.GymID, NewProduct{ID: id, Name: name, Price: domain.FormatMoney(cents), IsActive: active, Position: position})
+	return s.Repo.CreateProduct(ctx, p.GymID, NewProduct{ID: id, Name: name, Price: domain.FormatMoney(cents), IsActive: active, Position: position, CategoryID: in.CategoryID})
 }
 
 // DeleteProduct removes a product that was never sold (admin). A sold product can only be deactivated: its sales
@@ -90,7 +90,7 @@ func (s *Service) UpdateProduct(ctx context.Context, p auth.Principal, id uuid.U
 		return ProductView{}, err
 	}
 	var issues []domain.Issue
-	patch := ProductPatch{IsActive: in.IsActive}
+	patch := ProductPatch{IsActive: in.IsActive, SetCategory: in.CategoryID.Set, CategoryID: in.CategoryID.Value}
 	if in.Name != nil {
 		name, ok := domain.ProductName(*in.Name)
 		if !ok {

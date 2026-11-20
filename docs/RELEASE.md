@@ -84,3 +84,15 @@ Pulso table** (nobody used the product) and drops the password columns, `user_gy
 Before deploying: system `pulso` with roles `admin`/`receptionist` in the console, its credential in
 `AUTH_CLIENT_SECRET`, `AUTH_ISSUER` in `/opt/pulso-api/.env`, the nginx location
 `deploy/host-nginx/console-pulso-api.location`, and the old `JWT_ACCESS_SECRET`/`ACCESS_TOKEN_TTL_SECONDS` removed.
+
+## QA core (migrations 00023 and 00024)
+
+- `00023_platform_fold_text`: a plain `IMMUTABLE` SQL function `fold_text(text)` (translate + lower) used by every
+  name search, so "ramirez" finds "Ramírez". No extension and no superuser: `pulso_app` (which runs the migrations)
+  creates it in schema `pulso`. Searches stay sequential scans per gym, as before (no new index).
+- `00024_sales_product_categories`: table `product_categories` and nullable `products.category_id`
+  (`ON DELETE SET NULL (category_id)`, PostgreSQL 15+, same syntax as `access_entries`). Additive; existing products
+  stay without category.
+- New endpoints: `DELETE /products/{id}` (409 `PRODUCT_HAS_SALES` for sold products), `/product-categories`,
+  `/admin/gyms/{gym_id}/product-categories`. `GET /members?status=expiring` lists the soonest end first. Access
+  history rows carry `ends_on`.

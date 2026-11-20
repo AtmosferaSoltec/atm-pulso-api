@@ -72,3 +72,10 @@ func (r *Reader) Branches(ctx context.Context, gymID uuid.UUID) ([]Info, error) 
 	}
 	return out, rows.Err()
 }
+
+// GymExists says whether the gym exists (for the platform administrator's routes, which name it in the URL).
+func (r *Reader) GymExists(ctx context.Context, gymID uuid.UUID) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM gyms WHERE id = $1)`, gymID).Scan(&exists)
+	return exists, err
+}

@@ -58,3 +58,26 @@ func TestMergeLines(t *testing.T) {
 	_, ok = MergeLines(many)
 	assert.False(t, ok, "too many different products")
 }
+
+func TestCategoryNames(t *testing.T) {
+	name, ok := CategoryName("  Batidos   proteicos ")
+	assert.True(t, ok)
+	assert.Equal(t, "Batidos proteicos", name)
+	_, ok = CategoryName(string(make([]rune, 41)))
+	assert.False(t, ok)
+
+	names, repeated, ok := CategoryNames([]string{"Batidos", "", "  ", "suplementos", "BATIDOS", "Suplementos ", "Material"})
+	assert.True(t, ok)
+	assert.Equal(t, []string{"Batidos", "suplementos", "Material"}, names)
+	assert.Equal(t, []string{"BATIDOS", "Suplementos"}, repeated)
+	for name, raw := range map[string][]string{"empty": nil, "blank": {" ", ""}, "too long": {"Ok", "12345678901234567890123456789012345678901"}} {
+		_, _, ok := CategoryNames(raw)
+		assert.False(t, ok, name)
+	}
+	many := make([]string, MaxBulkCategories+1)
+	for i := range many {
+		many[i] = uuid.NewString()[:8]
+	}
+	_, _, ok = CategoryNames(many)
+	assert.False(t, ok)
+}

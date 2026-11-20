@@ -37,18 +37,35 @@ func constraintOf(err error) string {
 
 // ---- Catalog ----
 
+const productSelect = `SELECT p.id, p.name, p.price::text, p.is_active, p.position, c.id, c.name
+	FROM products p LEFT JOIN product_categories c ON c.id = p.category_id AND c.gym_id = p.gym_id
+	WHERE p.gym_id = $1`
+
+func scanProduct(row pgx.Row) (app.ProductView, error) {
+	var v app.ProductView
+	var categoryID *uuid.UUID
+	var categoryName *string
+	if err := row.Scan(&v.ID, &v.Name, &v.Price, &v.IsActive, &v.Position, &categoryID, &categoryName); err != nil {
+		return v, err
+	}
+	if categoryID != nil && categoryName != nil {
+		v.CategoryID = categoryID
+		v.Category = &app.CategoryRef{ID: *categoryID, Name: *categoryName}
+	}
+	return v, nil
+}
+
 // Products lists the catalog by position.
 func (r *Repository) Products(ctx context.Context, gymID uuid.UUID, includeInactive bool) ([]app.ProductView, error) {
-	rows, err := r.pool.Query(ctx, `SELECT id, name, price::text, is_active, position FROM products
-		WHERE gym_id = $1 AND ($2 OR is_active) ORDER BY position, lower(name), id`, gymID, includeInactive)
+	rows, err := r.pool.Query(ctx, productSelect+` AND ($2 OR p.is_active) ORDER BY p.position, lower(p.name), p.id`, gymID, includeInactive)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []app.ProductView{}
 	for rows.Next() {
-		var v app.ProductView
-		if err := rows.Scan(&v.ID, &v.Name, &v.Price, &v.IsActive, &v.Position); err != nil {
+		v, err := scanProduct(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -57,9 +74,7 @@ func (r *Repository) Products(ctx context.Context, gymID uuid.UUID, includeInact
 }
 
 func oneProduct(ctx context.Context, q querier, gymID, id uuid.UUID) (app.ProductView, error) {
-	var v app.ProductView
-	err := q.QueryRow(ctx, `SELECT id, name, price::text, is_active, position FROM products WHERE gym_id = $1 AND id = $2`, gymID, id).
-		Scan(&v.ID, &v.Name, &v.Price, &v.IsActive, &v.Position)
+	v, err := scanProduct(q.QueryRow(ctx, productSelect+` AND p.id = $2`, gymID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return v, domain.ErrProductNotFound
 	}
@@ -67,6 +82,10 @@ func oneProduct(ctx context.Context, q querier, gymID, id uuid.UUID) (app.Produc
 }
 
 func translateProductWrite(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" && pgErr.ConstraintName == "products_category_fkey" {
+		return &domain.ValidationError{Issues: []domain.Issue{{Field: "category_id", Code: domain.CodeCategory}}}
+	}
 	switch constraintOf(err) {
 	case "products_name_key":
 		return domain.ErrProductNameTaken
@@ -87,9 +106,9 @@ func (r *Repository) CreateProduct(ctx context.Context, gymID uuid.UUID, p app.N
 		if _, err := t.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 1))`, gymID.String()); err != nil {
 			return err
 		}
-		_, err := t.Exec(ctx, `INSERT INTO products (id, gym_id, name, price, is_active, position)
-			VALUES ($1, $2, $3, $4::numeric, $5, CASE WHEN $6 < 0 THEN COALESCE((SELECT max(position) + 1 FROM products WHERE gym_id = $2), 0) ELSE $6 END)`,
-			p.ID, gymID, p.Name, p.Price, p.IsActive, p.Position)
+		_, err := t.Exec(ctx, `INSERT INTO products (id, gym_id, name, price, is_active, position, category_id)
+			VALUES ($1, $2, $3, $4::numeric, $5, CASE WHEN $6 < 0 THEN COALESCE((SELECT max(position) + 1 FROM products WHERE gym_id = $2), 0) ELSE $6 END, $7)`,
+			p.ID, gymID, p.Name, p.Price, p.IsActive, p.Position, p.CategoryID)
 		return err
 	})
 	if err != nil {
@@ -103,8 +122,9 @@ func (r *Repository) CreateProduct(ctx context.Context, gymID uuid.UUID, p app.N
 func (r *Repository) UpdateProduct(ctx context.Context, gymID, id uuid.UUID, c app.ProductPatch) (app.ProductView, error) {
 	tag, err := r.pool.Exec(ctx, `UPDATE products SET
 		name = COALESCE($3, name), price = COALESCE($4::numeric, price), is_active = COALESCE($5, is_active),
-		position = COALESCE($6, position), updated_at = now() WHERE id = $1 AND gym_id = $2`,
-		id, gymID, c.Name, c.Price, c.IsActive, c.Position)
+		position = COALESCE($6, position), category_id = CASE WHEN $7 THEN $8::uuid ELSE category_id END,
+		updated_at = now() WHERE id = $1 AND gym_id = $2`,
+		id, gymID, c.Name, c.Price, c.IsActive, c.Position, c.SetCategory, c.CategoryID)
 	if err != nil {
 		return app.ProductView{}, translateProductWrite(err)
 	}

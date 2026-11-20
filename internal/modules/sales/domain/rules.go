@@ -58,6 +58,43 @@ func ProductName(raw string) (string, bool) {
 	return name, n >= 1 && n <= MaxNameLength
 }
 
+// MaxCategoryNameLength and MaxBulkCategories limit the categories (the first is repeated as a CHECK).
+const (
+	MaxCategoryNameLength = 40
+	MaxBulkCategories     = 100
+)
+
+// CategoryName trims and collapses spaces; a valid name has 1 to 40 characters.
+func CategoryName(raw string) (string, bool) {
+	name := strings.Join(strings.Fields(raw), " ")
+	n := utf8.RuneCountInString(name)
+	return name, n >= 1 && n <= MaxCategoryNameLength
+}
+
+// CategoryNames normalizes a bulk list: blank entries are dropped and repeats (ignoring case) are kept once,
+// in the order of first appearance; they come back in repeated. It reports false when a name is too long or
+// there are no names or more than MaxBulkCategories.
+func CategoryNames(raw []string) (names, repeated []string, ok bool) {
+	seen := map[string]bool{}
+	for _, entry := range raw {
+		if strings.TrimSpace(entry) == "" {
+			continue
+		}
+		name, valid := CategoryName(entry)
+		if !valid {
+			return nil, nil, false
+		}
+		key := strings.ToLower(name)
+		if seen[key] {
+			repeated = append(repeated, name)
+			continue
+		}
+		seen[key] = true
+		names = append(names, name)
+	}
+	return names, repeated, len(names) >= 1 && len(names) <= MaxBulkCategories
+}
+
 // ProductPrice validates a unit price: 0.01 to 10000.00.
 func ProductPrice(raw string) (int64, bool) {
 	cents, ok := ParseMoney(raw)
@@ -101,6 +138,9 @@ var (
 	ErrProductNameTaken = errors.New("product name taken")
 	// ErrProductHasSales: a product that was ever sold cannot be deleted, only deactivated (its sales point to it).
 	ErrProductHasSales     = errors.New("product has sales")
+	ErrCategoryNotFound    = errors.New("category not found")
+	ErrCategoryNameTaken   = errors.New("category name taken")
+	ErrGymNotFound         = errors.New("gym not found")
 	ErrSaleNotFound        = errors.New("sale not found")
 	ErrMemberNotFound      = errors.New("member not found")
 	ErrBranchNotAccessible = errors.New("branch not accessible")
@@ -125,6 +165,10 @@ const (
 	CodeName           = "PRODUCT_NAME_INVALID"
 	CodePrice          = "PRODUCT_PRICE_INVALID"
 	CodePosition       = "PRODUCT_POSITION_INVALID"
+	CodeCategory       = "CATEGORY_INVALID"
+	CodeCategoryName   = "CATEGORY_NAME_INVALID"
+	CodeCategoryNames  = "CATEGORY_NAMES_INVALID"
+	CodeCategoryPos    = "CATEGORY_POSITION_INVALID"
 	CodeItems          = "ITEMS_INVALID"
 	CodeProduct        = "PRODUCT_INVALID"
 	CodeStatus         = "STATUS_INVALID"

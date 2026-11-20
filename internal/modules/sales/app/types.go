@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,7 @@ type BranchInfo = branchdir.Info
 type Directory interface {
 	Branch(ctx context.Context, gymID, branchID uuid.UUID) (BranchInfo, error)
 	Branches(ctx context.Context, gymID uuid.UUID) ([]BranchInfo, error)
+	GymExists(ctx context.Context, gymID uuid.UUID) (bool, error)
 }
 
 // People reads members and staff names (owned by other modules; read-only).
@@ -31,11 +33,19 @@ type People interface {
 
 // ProductView is a product of the catalog.
 type ProductView struct {
-	ID       uuid.UUID `json:"id"`
-	Name     string    `json:"name"`
-	Price    string    `json:"price"`
-	IsActive bool      `json:"is_active"`
-	Position int       `json:"position"`
+	ID         uuid.UUID    `json:"id"`
+	Name       string       `json:"name"`
+	Price      string       `json:"price"`
+	IsActive   bool         `json:"is_active"`
+	Position   int          `json:"position"`
+	CategoryID *uuid.UUID   `json:"category_id"`
+	Category   *CategoryRef `json:"category"`
+}
+
+// CategoryRef names the category of a product.
+type CategoryRef struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
 }
 
 // ProductInput is the body of POST /products.
@@ -46,6 +56,8 @@ type ProductInput struct {
 	IsActive *bool     `json:"is_active"`
 	// Position: negative or absent puts the product last.
 	Position *int `json:"position"`
+	// CategoryID is optional; it must be a category of the same gym.
+	CategoryID *uuid.UUID `json:"category_id"`
 }
 
 // ProductChanges is the body of PATCH /products/{id}: only the fields sent change.
@@ -54,6 +66,65 @@ type ProductChanges struct {
 	Price    *string `json:"price"`
 	IsActive *bool   `json:"is_active"`
 	Position *int    `json:"position"`
+	// CategoryID: absent keeps it, null clears it.
+	CategoryID OptionalID `json:"category_id"`
+}
+
+// OptionalID tells an absent JSON field (Set false) from an explicit null (Set true, Value nil).
+type OptionalID struct {
+	Set   bool
+	Value *uuid.UUID
+}
+
+// UnmarshalJSON runs only when the field is present, null included.
+func (o *OptionalID) UnmarshalJSON(raw []byte) error {
+	o.Set = true
+	if string(raw) == "null" {
+		o.Value = nil
+		return nil
+	}
+	var id uuid.UUID
+	if err := json.Unmarshal(raw, &id); err != nil {
+		return err
+	}
+	o.Value = &id
+	return nil
+}
+
+// CategoryView is a product category of the gym.
+type CategoryView struct {
+	ID       uuid.UUID `json:"id"`
+	Name     string    `json:"name"`
+	Position int       `json:"position"`
+}
+
+// AdminCategoryView adds, for the console, how many products a deletion would leave without category.
+type AdminCategoryView struct {
+	CategoryView
+	ProductCount int `json:"product_count"`
+}
+
+// CategoryInput is the body of POST /product-categories.
+type CategoryInput struct {
+	Name string `json:"name"`
+}
+
+// CategoryChanges is the body of PATCH /product-categories/{id}: only the fields sent change.
+type CategoryChanges struct {
+	Name     *string `json:"name"`
+	Position *int    `json:"position"`
+}
+
+// BulkCategoriesInput is the body of POST /admin/gyms/{gym_id}/product-categories.
+type BulkCategoriesInput struct {
+	Names []string `json:"names"`
+}
+
+// BulkCategoriesResult answers a bulk creation: the categories created and the names skipped because the gym
+// already had them or they were repeated in the list (ignoring case).
+type BulkCategoriesResult struct {
+	Created []CategoryView `json:"created"`
+	Skipped []string       `json:"skipped"`
 }
 
 // SaleItemInput is one product of a sale. The unit price always comes from the catalog.
@@ -227,7 +298,8 @@ type NewProduct struct {
 	Price    string
 	IsActive bool
 	// Position: negative puts it last.
-	Position int
+	Position   int
+	CategoryID *uuid.UUID
 }
 
 // ProductPatch is a normalized partial update.
@@ -236,6 +308,9 @@ type ProductPatch struct {
 	Price    *string
 	IsActive *bool
 	Position *int
+	// SetCategory replaces the category with CategoryID (nil clears it).
+	SetCategory bool
+	CategoryID  *uuid.UUID
 }
 
 // NewSale is a sale about to be stored; the repository resolves the products and the prices in the transaction.
@@ -303,6 +378,16 @@ type Repository interface {
 	UpdateProduct(ctx context.Context, gymID, id uuid.UUID, patch ProductPatch) (ProductView, error)
 	// DeleteProduct removes a product that was never sold: domain.ErrProductNotFound, domain.ErrProductHasSales.
 	DeleteProduct(ctx context.Context, gymID, id uuid.UUID) error
+
+	// Categories lists the gym's categories by position, then name.
+	Categories(ctx context.Context, gymID uuid.UUID) ([]AdminCategoryView, error)
+	// CreateCategories adds the names (already normalized and without repeats) at the end of the list, skipping
+	// those the gym already has (ignoring case). domain.ErrCategoryNameTaken never comes from here.
+	CreateCategories(ctx context.Context, gymID uuid.UUID, names []string) (created []CategoryView, skipped []string, err error)
+	// UpdateCategory: domain.ErrCategoryNotFound, domain.ErrCategoryNameTaken.
+	UpdateCategory(ctx context.Context, gymID, id uuid.UUID, name *string, position *int) (CategoryView, error)
+	// DeleteCategory removes the category; its products stay without category. domain.ErrCategoryNotFound.
+	DeleteCategory(ctx context.Context, gymID, id uuid.UUID) error
 
 	// CreateSale stores a sale with its items in one transaction; existed is true for a repeated id.
 	// domain.ValidationError (PRODUCT_INVALID, TOTAL_TOO_LARGE), domain.ErrConflict.
